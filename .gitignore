@@ -1,0 +1,8 @@
+node_modules
+dist
+.chave
+.canvas.json
+.canvas-imagens/
+.cotacao
+*.log
+DEMANDAS.md
