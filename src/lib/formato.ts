@@ -74,6 +74,9 @@ export function tipoDaFerramenta(n: string) {
 }
 
 export const mistura = (cor: string, pct: number) => `color-mix(in oklch, ${cor} ${pct}%, transparent)`
+/** Igual a mistura, mas sobre uma base sólida: o fundo fica opaco e tingido da cor. */
+// oklab, não oklch: o branco tem matiz 0 e puxava o azul e o verde para o rosa
+export const opaco = (cor: string, pct: number, base = 'var(--card)') => `color-mix(in oklab, ${cor} ${pct}%, ${base})`
 
 const nf = (n: number, casas: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: casas, minimumFractionDigits: 0 })
 

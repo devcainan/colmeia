@@ -44,11 +44,38 @@ const ESTADO = { pendente: '[ ]', andamento: '[~]', feito: '[x]' }
 const itensTexto = (b) => b.itens.map((i) => `${ESTADO[i.estado]} ${i.id}. ${i.texto}`).join('\n')
 const linhaTerminal = (t) => `${t.id}  ${t.tipo}  ${t.status}  ${t.titulo || ''}`
 
-ferramenta('criar_nota', 'Cria uma nota no canvas do painel, ligada ao seu chat. Use para deixar contexto, decisões ou instruções visíveis ao usuário.',
-  { titulo: z.string().describe('título curto'), texto: z.string().describe('conteúdo da nota') },
-  async ({ titulo, texto }) => {
-    const b = await api('POST', '/api/blocos', { tipo: 'nota', titulo, texto, origem: ORIGEM })
-    return `Nota ${b.id} criada no canvas: ${b.titulo}`
+ferramenta('criar_nota', 'Cria uma nota no canvas do painel, ligada ao seu chat. Use para deixar contexto, decisões ou instruções visíveis ao usuário. Para separar assuntos na mesma nota, passe abas (como no Bloco de Notas do Windows 11).',
+  {
+    titulo: z.string().describe('título curto'),
+    texto: z.string().optional().describe('conteúdo da nota (sem abas)'),
+    abas: z.array(z.object({ titulo: z.string(), texto: z.string() })).optional().describe('uma aba por assunto; a primeira é a principal'),
+  },
+  async ({ titulo, texto, abas }) => {
+    const b = await api('POST', '/api/blocos', { tipo: 'nota', titulo, texto: texto || '', abas, origem: ORIGEM })
+    return `Nota ${b.id} criada no canvas: ${b.titulo}${b.abas ? ` (${b.abas.length} abas)` : ''}`
+  })
+
+const MIDIA = { '.mp4': 'video/mp4', '.webm': 'video/webm', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }
+
+ferramenta('mostrar_video', 'Mostra no canvas um vídeo (MP4 ou WebM) ou uma imagem que você gerou, ligado ao seu chat, para o usuário assistir e escolher ali mesmo. Chame uma vez por arquivo. Para versões, use título com letra do grupo e número ("A1: nome", "A2: nome"; outro vídeo usa B): o botão Escolher esta versão manda a escolha ao seu terminal e tira do canvas as versões do mesmo grupo.',
+  {
+    arquivo: z.string().describe('caminho completo do arquivo no computador, ex.: C:/.../saida/versao-1.mp4'),
+    titulo: z.string().optional().describe('nome curto que aparece em cima do vídeo, ex.: "Versão 1: pilha da demanda"'),
+  },
+  async ({ arquivo, titulo }) => {
+    const tipo = MIDIA[path.extname(arquivo).toLowerCase()]
+    if (!tipo) throw new Error('use .mp4, .webm, .png, .jpg, .webp ou .gif')
+    const bytes = fs.readFileSync(arquivo)
+    if (bytes.length > 400e6) throw new Error('arquivo acima de 400 MB')
+    const u = `http://127.0.0.1:${PORTA}/api/formas/imagem?chave=${encodeURIComponent(chave())}`
+    let r
+    try { r = await fetch(u, { method: 'POST', headers: { 'Content-Type': tipo }, body: bytes, signal: AbortSignal.timeout(120000) }) }
+    catch { throw new Error(`o painel não está respondendo em 127.0.0.1:${PORTA}`) }
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(j.erro || `HTTP ${r.status}`)
+    const video = tipo.startsWith('video/')
+    const f = await api('POST', '/api/formas', { tipo: video ? 'video' : 'imagem', url: j.url, texto: titulo || path.basename(arquivo), origem: ORIGEM, ...(video ? {} : { w: 360, h: 360 }) })
+    return `${video ? 'Vídeo' : 'Imagem'} ${f.id} no canvas, ligado ao seu chat: ${f.texto}`
   })
 
 ferramenta('editar_nota', 'Troca o texto de uma nota do canvas ou acrescenta ao fim dela.',

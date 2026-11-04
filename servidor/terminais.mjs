@@ -351,10 +351,22 @@ function normalizarItens(b, itens) {
   })
 }
 
-export function criarBloco({ tipo, titulo, texto, itens, origem, ligarEm }) {
+/** Abas da nota, como no Bloco de Notas do Windows 11. A primeira espelha b.texto, que é o que o MCP e o Enviar leem. */
+function normalizarAbas(abas) {
+  if (!Array.isArray(abas)) return undefined
+  const out = abas.slice(0, 30).map((a, i) => ({
+    id: String(a?.id || crypto.randomBytes(3).toString('hex')).replace(/[^\w-]/g, '').slice(0, 12) || String(i + 1),
+    titulo: String(a?.titulo || `Aba ${i + 1}`).slice(0, 40),
+    texto: String(a?.texto ?? '').slice(0, 50000),
+  }))
+  return out.length ? out : undefined
+}
+
+export function criarBloco({ tipo, titulo, texto, itens, abas, origem, ligarEm }) {
   const ehLista = tipo === 'checklist'
   const b = { id: `b${crypto.randomBytes(3).toString('hex')}`, tipo: ehLista ? 'checklist' : 'nota', titulo: String(titulo || '').slice(0, 80) || (ehLista ? 'Checklist' : 'Nota'), texto: String(texto || ''), itens: [], seq: 0, criadoEm: Date.now() }
   if (Array.isArray(itens)) b.itens = normalizarItens(b, itens.map((i) => (typeof i === 'string' ? { texto: i } : i)))
+  if (!ehLista && normalizarAbas(abas)) { b.abas = normalizarAbas(abas); b.texto = b.abas[0].texto }
   canvas.blocos.push(b)
   // criado por um agente (ou a partir de um nó): já nasce ligado ao chat, à esquerda dele
   const no = ligarEm && noExiste(ligarEm) ? ligarEm : noDoAgente(origem)
@@ -371,11 +383,20 @@ export function criarBloco({ tipo, titulo, texto, itens, origem, ligarEm }) {
   return b
 }
 
-export function editarBloco(id, { titulo, texto, itens, acrescentar }) {
+export function editarBloco(id, { titulo, texto, itens, abas, acrescentar, cor }) {
   const b = acharBloco(id)
   if (!b) return null
   if (titulo !== undefined) b.titulo = String(titulo).slice(0, 80)
-  if (texto !== undefined) b.texto = (acrescentar && b.texto ? `${b.texto}\n${texto}` : String(texto)).slice(0, 50000)
+  // cor do fundo escolhida no botão direito; vazio volta à cor padrão do tipo
+  if (cor !== undefined) { const c = String(cor).trim(); if (/^#[0-9a-f]{3,8}$/i.test(c)) b.cor = c; else delete b.cor }
+  if (b.tipo === 'nota' && abas !== undefined) {
+    b.abas = normalizarAbas(abas)
+    if (b.abas) b.texto = b.abas[0].texto
+  }
+  if (texto !== undefined) {
+    b.texto = (acrescentar && b.texto ? `${b.texto}\n${texto}` : String(texto)).slice(0, 50000)
+    if (b.abas) b.abas[0].texto = b.texto
+  }
   if (Array.isArray(itens)) b.itens = normalizarItens(b, (acrescentar ? [...b.itens, ...itens] : itens).map((i) => (typeof i === 'string' ? { texto: i } : i)))
   avisar()
   gravar()
@@ -406,7 +427,7 @@ export function apagarBloco(id) {
 }
 
 const noExiste = (no) => (no.startsWith('t:') && terminais.has(no.slice(2))) || (no.startsWith('b:') && !!acharBloco(no.slice(2))) || no.startsWith('s:')
-  || (no.startsWith('w:') && widgetExiste(no.slice(2)))
+  || (no.startsWith('w:') && widgetExiste(no.slice(2))) || (no.startsWith('f:') && !!acharForma(no.slice(2)))
 
 export function ligar(de, para) {
   if (!de || !para || de === para || !noExiste(de) || !noExiste(para)) throw new Error('ligação inválida')
@@ -428,6 +449,7 @@ export function desligar(id) {
 }
 
 function textoDoBloco(b) {
+  if (b.tipo === 'nota' && b.abas?.length > 1) return [`[Nota do painel: ${b.titulo}]`, ...b.abas.map((a) => `--- ${a.titulo} ---\n${a.texto.trim()}`)].join('\n\n')
   if (b.tipo === 'nota') return `[Nota do painel: ${b.titulo}]\n${b.texto.trim()}`
   const falta = b.itens.filter((i) => i.estado !== 'feito')
   return [
@@ -454,7 +476,7 @@ export function enviarBloco(id) {
 
 // ---------- Formas do quadro, como no Figma: frame, retângulo, texto, imagem e traço do lápis ----------
 
-const TIPOS_FORMA = ['frame', 'retangulo', 'texto', 'imagem', 'desenho']
+const TIPOS_FORMA = ['frame', 'retangulo', 'texto', 'imagem', 'desenho', 'video']
 const acharForma = (id) => canvas.formas.find((f) => f.id === id)
 const num = (v, padrao) => (Number.isFinite(Number(v)) ? Number(v) : padrao)
 
@@ -464,25 +486,38 @@ function limparPontos(pontos) {
   return pontos.slice(0, 4000).filter((p) => Array.isArray(p) && p.length === 2).map(([x, y]) => [Math.round(num(x, 0) * 1000) / 1000, Math.round(num(y, 0) * 1000) / 1000])
 }
 
-function campos(f, { cor, texto, tamanho, pontos, espessura }) {
+function campos(f, { cor, texto, tamanho, pontos, espessura, opacidade }) {
   if (typeof cor === 'string') f.cor = cor.slice(0, 40)
+  if (opacidade !== undefined) f.opacidade = Math.min(Math.max(num(opacidade, 5), 0), 100) // fundo do frame, em %
   if (texto !== undefined) f.texto = String(texto).slice(0, 20000)
   if (tamanho !== undefined) f.tamanho = Math.min(Math.max(num(tamanho, 16), 8), 200)
   if (espessura !== undefined) f.espessura = Math.min(Math.max(num(espessura, 3), 1), 40)
   if (pontos !== undefined) f.pontos = limparPontos(pontos)
 }
 
-export function criarForma({ tipo, x, y, w, h, url, ...resto }) {
+export function criarForma({ tipo, x, y, w, h, url, origem, ligarEm, ...resto }) {
   if (!TIPOS_FORMA.includes(tipo)) throw new Error('forma desconhecida')
   const f = { id: `f${crypto.randomBytes(4).toString('hex')}`, tipo, cor: '', texto: '', criadoEm: Date.now() }
-  if (tipo === 'imagem') {
-    if (typeof url !== 'string' || !url.startsWith('/api/formas/imagem/')) throw new Error('imagem inválida')
+  if (tipo === 'imagem' || tipo === 'video') {
+    if (typeof url !== 'string' || !url.startsWith('/api/formas/imagem/')) throw new Error(`${tipo} inválido`)
     f.url = url
   }
   if (tipo === 'frame') f.texto = 'Frame'
   campos(f, resto)
   canvas.formas.push(f)
-  canvas.posicoes[`f:${f.id}`] = { x: num(x, 0), y: num(y, 0), w: Math.max(num(w, 200), 8), h: Math.max(num(h, 120), 8) }
+  const padrao = tipo === 'video' ? { w: 360, h: 400 } : { w: 200, h: 120 }
+  let pos = { x: num(x, 0), y: num(y, 0), w: Math.max(num(w, padrao.w), 8), h: Math.max(num(h, padrao.h), 8) }
+  // mostrada por um agente (MCP): nasce ligada a ele, em fila embaixo do nó dele
+  const no = ligarEm && noExiste(ligarEm) ? ligarEm : origem ? noDoAgente(origem) : null
+  if (no) {
+    const p = canvas.posicoes[no]
+    if (p && x === undefined) {
+      const irmaos = canvas.ligacoes.filter((l) => (l.para === no && l.de.startsWith('f:')) || (l.de === no && l.para.startsWith('f:'))).length
+      pos = { ...pos, x: p.x + irmaos * (pos.w + 24), y: p.y + (p.h || 560) + 60 }
+    }
+    canvas.ligacoes.push({ id: `l${crypto.randomBytes(3).toString('hex')}`, de: `f:${f.id}`, para: no })
+  }
+  canvas.posicoes[`f:${f.id}`] = pos
   avisar()
   gravar()
   return f
@@ -497,10 +532,23 @@ export function editarForma(id, dados) {
   return f
 }
 
+/** Botão "Escolher esta versão" num vídeo do canvas: avisa o(s) terminal(is) ligado(s) a ele. */
+export function escolherForma(id) {
+  const f = acharForma(id)
+  if (!f) return null
+  const no = `f:${id}`
+  const alvos = canvas.ligacoes.flatMap((l) => (l.de === no ? [l.para] : l.para === no ? [l.de] : []))
+    .filter((x) => x.startsWith('t:')).map((x) => x.slice(2)).filter((t) => terminais.has(t))
+  if (!alvos.length) throw new Error('este vídeo não está ligado a nenhum terminal')
+  const texto = `[Canvas] O usuário escolheu esta versão: "${f.texto || (f.tipo === 'video' ? 'vídeo' : 'imagem')}" (${no}, ${f.url}). Siga com ela.`
+  return { resultados: alvos.map((t) => ({ terminal: t, ...mandar(t, texto, true) })) }
+}
+
 export function apagarForma(id) {
   const f = acharForma(id)
   if (!f) return false
   canvas.formas = canvas.formas.filter((x) => x.id !== id)
+  canvas.ligacoes = canvas.ligacoes.filter((l) => l.de !== `f:${id}` && l.para !== `f:${id}`)
   delete canvas.posicoes[`f:${id}`]
   // a imagem sai do disco só quando nenhuma outra forma a usa
   if (f.url && !canvas.formas.some((x) => x.url === f.url)) fs.rm(path.join(DIR_IMAGENS, path.basename(f.url)), { force: true }, () => {})
@@ -509,12 +557,12 @@ export function apagarForma(id) {
   return true
 }
 
-const EXT_IMAGEM = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
+const EXT_IMAGEM = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4', 'video/webm': 'webm' }
 
 /** Guarda a imagem colada ou solta no quadro e devolve o endereço dela. */
 export function guardarImagem(bytes, tipo) {
   const ext = EXT_IMAGEM[tipo]
-  if (!ext) throw new Error('só PNG, JPG, WebP ou GIF')
+  if (!ext) throw new Error('só PNG, JPG, WebP, GIF, MP4 ou WebM')
   fs.mkdirSync(DIR_IMAGENS, { recursive: true })
   const nome = `${crypto.randomBytes(8).toString('hex')}.${ext}`
   fs.writeFileSync(path.join(DIR_IMAGENS, nome), bytes)

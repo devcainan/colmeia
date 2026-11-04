@@ -1,11 +1,11 @@
 import { createContext, memo, useContext, useEffect, useRef, useState } from 'react'
-import { Handle, NodeResizer, Position, type Node, type NodeProps } from '@xyflow/react'
-import { ArrowDown, ArrowUp, Circle, CircleCheck, CircleDot, ListChecks, Maximize2, Network, Plus, RotateCcw, Send, StickyNote, X } from 'lucide-react'
+import { Handle, NodeResizer, Position, useStore, type Node, type NodeProps } from '@xyflow/react'
+import { ArrowDown, ArrowUp, Check, Circle, CircleCheck, CircleDot, ExternalLink, Film, ListChecks, Maximize2, Network, Plus, RotateCcw, Send, StickyNote, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { api, enviar } from '@/lib/dados'
-import { AGENTES, STATUS, corContexto, fmtPct, mistura, statusDaTarefa, tarefa } from '@/lib/formato'
-import type { Bloco, EstadoGit, EstadoItem, Forma, Posicao, Sessao, SubResumo, Terminal } from '@/lib/tipos'
+import { AGENTES, STATUS, corContexto, fmtPct, mistura, opaco, statusDaTarefa, tarefa } from '@/lib/formato'
+import type { AbaNota, Bloco, EstadoGit, EstadoItem, Forma, Posicao, Sessao, SubResumo, Terminal } from '@/lib/tipos'
 import { ProgressoChecklist } from '@/components/painel/CartaoSessao'
 import { Validar } from '@/components/painel/Validar'
 import { TerminalXterm } from './TerminalXterm'
@@ -20,6 +20,8 @@ export type AcoesCanvas = {
   editando: string | null
   setEditando: (no: string | null) => void
   migrar: (sessao: string) => Promise<void>
+  /** avisa o agente da versão escolhida e tira do canvas as versões do mesmo grupo (A1..A5) */
+  escolherVideo: (f: Forma) => Promise<{ resultados: { resultado: string }[]; saiu: number }>
 }
 export const Acoes = createContext<AcoesCanvas>(null!)
 
@@ -312,22 +314,109 @@ function BotaoEnviar({ b, ligados, rotulo }: { b: Bloco; ligados: number; rotulo
   )
 }
 
+// nota antiga (sem abas) vira uma aba só com o texto dela
+const abasDe = (b: Bloco): AbaNota[] => (b.abas?.length ? b.abas : [{ id: '1', titulo: 'Aba 1', texto: b.texto }])
+const lerAba = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
+const guardarAba = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* sem armazenamento */ } }
+
+/** Abas como no Bloco de Notas do Windows 11: + cria, duplo clique renomeia, x ou botão do meio fecha. */
+function AbasDaNota({ cor, abas, ativa, escolher, nova, renomear, fechar }: {
+  cor: string; abas: AbaNota[]; ativa: string; escolher: (id: string) => void; nova: () => void; renomear: (id: string, titulo: string) => void; fechar: (id: string) => void
+}) {
+  const [editando, setEditando] = useState<string | null>(null)
+  const [confirmar, setConfirmar] = useState<string | null>(null)
+  useEffect(() => { if (!confirmar) return; const x = setTimeout(() => setConfirmar(null), 3000); return () => clearTimeout(x) }, [confirmar])
+  // aba com texto pede um segundo clique no x para não apagar sem querer
+  const tentarFechar = (a: AbaNota) => {
+    if (abas.length === 1) return
+    if (a.texto.trim() && confirmar !== a.id) { setConfirmar(a.id); return }
+    setConfirmar(null)
+    fechar(a.id)
+  }
+  return (
+    <div className="nodrag nowheel flex items-end gap-0.5 overflow-x-auto border-b border-border/60 px-1.5 pt-1" style={{ background: opaco(cor, 26) }}>
+      {abas.map((a) => {
+        const aqui = a.id === ativa
+        return (
+          <div key={a.id} title={a.titulo} onClick={() => escolher(a.id)} onDoubleClick={() => setEditando(a.id)}
+            onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); tentarFechar(a) } }}
+            className={cn('group flex max-w-36 shrink-0 cursor-pointer items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-[11px]',
+              aqui ? 'border-border/60 text-foreground' : 'border-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground')}
+            style={aqui ? { background: opaco(cor, 18) } : undefined}>
+            {editando === a.id ? (
+              <input autoFocus defaultValue={a.titulo} onFocus={(e) => e.target.select()}
+                onBlur={(e) => { renomear(a.id, e.target.value.trim() || a.titulo); setEditando(null) }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditando(null) }}
+                className="w-24 rounded bg-background px-1 outline-none ring-1 ring-ring" />
+            ) : <span className="truncate">{a.titulo}</span>}
+            {abas.length > 1 && (
+              <button onClick={(e) => { e.stopPropagation(); tentarFechar(a) }}
+                title={confirmar === a.id ? 'Clique de novo para fechar (o texto desta aba será apagado)' : 'Fechar aba'}
+                className={cn('rounded p-px', confirmar === a.id ? 'bg-destructive/20 text-destructive opacity-100' : 'opacity-0 hover:bg-accent group-hover:opacity-100', aqui && 'opacity-60')}>
+                <X className="size-2.5" />
+              </button>
+            )}
+          </div>
+        )
+      })}
+      <button onClick={nova} title="Nova aba" className="mb-0.5 ml-0.5 grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground">
+        <Plus className="size-3" />
+      </button>
+    </div>
+  )
+}
+
 export const NoNota = memo(function NoNota({ id, data, selected }: NodeProps<Node<DadosBloco>>) {
   const { b, ligados } = data
-  const [texto, mudar] = useRascunho(b.texto, (v) => void enviar('PATCH', `/api/blocos/${b.id}`, { texto: v }).catch(() => {}))
+  const [abas, setAbas] = useState(() => abasDe(b))
+  const escrevendo = useRef(false)
+  const timer = useRef(0)
+  // o que chega do servidor só entra quando ninguém está digitando aqui
+  useEffect(() => { if (!escrevendo.current) setAbas(abasDe(b)) }, [b])
+  const chaveAba = `nota-aba-${b.id}`
+  const [ativa, setAtiva] = useState(() => lerAba(chaveAba) || abasDe(b)[0].id)
+  const atual = abas.find((a) => a.id === ativa) || abas[0]
+  const escolher = (aid: string) => { setAtiva(aid); guardarAba(chaveAba, aid) }
+
+  const gravar = (novas: AbaNota[], agora = false) => {
+    setAbas(novas)
+    escrevendo.current = true
+    clearTimeout(timer.current)
+    const ir = () => { void enviar('PATCH', `/api/blocos/${b.id}`, { abas: novas }).catch(() => {}); escrevendo.current = false }
+    if (agora) ir()
+    else timer.current = window.setTimeout(ir, 600)
+  }
+  const nova = () => {
+    const usados = new Set(abas.map((a) => a.titulo))
+    let n = abas.length + 1
+    while (usados.has(`Aba ${n}`)) n++
+    const a = { id: Math.random().toString(36).slice(2, 8), titulo: `Aba ${n}`, texto: '' }
+    gravar([...abas, a], true)
+    escolher(a.id)
+  }
+  const fechar = (aid: string) => {
+    const i = abas.findIndex((a) => a.id === aid)
+    const novas = abas.filter((a) => a.id !== aid)
+    gravar(novas, true)
+    if (aid === atual.id) escolher(novas[Math.min(i, novas.length - 1)].id)
+  }
   const acop = useAcoplamento(id)
+  const cor = b.cor || COR.nota
   return (
-    <div {...acop.props} className="flex h-full w-full flex-col overflow-hidden rounded-xl border-2 bg-card shadow-md" style={{ borderColor: mistura(COR.nota, selected ? 90 : 50) }}>
+    <div {...acop.props} className="flex h-full w-full flex-col overflow-hidden rounded-xl border-2 shadow-md" style={{ borderColor: mistura(cor, selected ? 90 : 50), background: opaco(cor, 18) }}>
       <Encaixe ativo={acop.ativo} />
       <Redimensionar id={id} visivel={selected} minW={220} minH={140} />
-      <header className="alca flex cursor-grab items-center gap-2 px-3 py-2" style={{ background: mistura(COR.nota, 14) }}>
-        <StickyNote className="size-3.5 shrink-0" style={{ color: COR.nota }} />
+      <header className="alca flex cursor-grab items-center gap-2 px-3 py-2" style={{ background: opaco(cor, 32) }}>
+        <StickyNote className="size-3.5 shrink-0" style={{ color: cor }} />
         <Titulo no={id} valor={b.titulo} className="text-xs font-medium" aoSalvar={(v) => void enviar('PATCH', `/api/blocos/${b.id}`, { titulo: v }).catch(() => {})} />
       </header>
-      <textarea value={texto} onChange={(e) => mudar(e.target.value)} placeholder="Escreva a nota. Ligue a um terminal e use Enviar para o agente receber."
+      <AbasDaNota cor={cor} abas={abas} ativa={atual.id} escolher={escolher} nova={nova} fechar={fechar}
+        renomear={(aid, titulo) => gravar(abas.map((a) => (a.id === aid ? { ...a, titulo } : a)), true)} />
+      <textarea key={atual.id} value={atual.texto} onChange={(e) => gravar(abas.map((a) => (a.id === atual.id ? { ...a, texto: e.target.value } : a)))}
+        placeholder="Escreva a nota. Ligue a um terminal e use Enviar para o agente receber (vão todas as abas)."
         className="nodrag nowheel min-h-0 flex-1 resize-none bg-transparent px-3 py-2 text-xs leading-relaxed outline-none placeholder:text-muted-foreground/70" />
       <BotaoEnviar b={b} ligados={ligados} rotulo="Enviar" />
-      <Lados cor={COR.nota} />
+      <Lados cor={cor} />
     </div>
   )
 })
@@ -346,13 +435,14 @@ export const NoChecklist = memo(function NoChecklist({ id, data, selected }: Nod
     void enviar('POST', `/api/blocos/${b.id}/marcar`, { item: i.id, estado: i.estado === 'feito' ? 'pendente' : 'feito', por: 'usuario' }).catch(() => {})
   const adicionar = () => { if (!novo.trim()) return; gravar([...b.itens, { texto: novo.trim() }]); setNovo('') }
   const acop = useAcoplamento(id)
+  const cor = b.cor || COR.checklist
 
   return (
-    <div {...acop.props} className="flex h-full w-full flex-col overflow-hidden rounded-xl border-2 bg-card shadow-md" style={{ borderColor: mistura(COR.checklist, selected ? 90 : 50) }}>
+    <div {...acop.props} className="flex h-full w-full flex-col overflow-hidden rounded-xl border-2 shadow-md" style={{ borderColor: mistura(cor, selected ? 90 : 50), background: opaco(cor, 18) }}>
       <Encaixe ativo={acop.ativo} />
       <Redimensionar id={id} visivel={selected} minW={240} minH={160} />
-      <header className="alca flex cursor-grab items-center gap-2 px-3 py-2" style={{ background: mistura(COR.checklist, 14) }}>
-        <ListChecks className="size-3.5 shrink-0" style={{ color: COR.checklist }} />
+      <header className="alca flex cursor-grab items-center gap-2 px-3 py-2" style={{ background: opaco(cor, 32) }}>
+        <ListChecks className="size-3.5 shrink-0" style={{ color: cor }} />
         <Titulo no={id} valor={b.titulo} className="text-xs font-medium" aoSalvar={(v) => void enviar('PATCH', `/api/blocos/${b.id}`, { titulo: v }).catch(() => {})} />
         <span className="font-mono text-[10px] text-muted-foreground">{feitos}/{b.itens.length}</span>
       </header>
@@ -379,7 +469,7 @@ export const NoChecklist = memo(function NoChecklist({ id, data, selected }: Nod
         <Button type="submit" size="icon" variant="ghost" className="size-7" disabled={!novo.trim()}><Plus className="size-3.5" /></Button>
       </form>
       <BotaoEnviar b={b} ligados={ligados} rotulo="Executar" />
-      <Lados cor={COR.checklist} />
+      <Lados cor={cor} />
     </div>
   )
 })
@@ -391,13 +481,18 @@ const COR_PADRAO_FORMA = 'var(--muted-foreground)'
 const editarForma = (f: Forma, dados: Partial<Forma>) => void enviar('PATCH', `/api/formas/${f.id}`, dados).catch(() => {})
 
 /** O frame fica atrás de tudo e só pega o mouse pelo nome e pelas alças: dentro dele a seleção por arraste continua. */
-export const NoFrame = memo(function NoFrame({ id, data, selected }: NodeProps<Node<DadosForma>>) {
+export const NoFrame = memo(function NoFrame({ id, data, selected, width }: NodeProps<Node<DadosForma>>) {
   const { f } = data
   const cor = f.cor || COR_PADRAO_FORMA
+  // o nome do frame fica do mesmo tamanho na tela em qualquer zoom: dá para ler com o canvas bem afastado.
+  // Não passa da largura do frame na tela, para não cobrir o nome do vizinho (o nome inteiro fica no passar do mouse).
+  const zoom = useStore((s) => s.transform[2])
+  const largura = Math.max(70, ((width as number) || 480) * zoom)
   return (
-    <div className="relative h-full w-full rounded-md border" style={{ borderColor: mistura(cor, selected ? 95 : 60), background: mistura(cor, 5) }}>
+    <div className="relative h-full w-full rounded-md" style={{ background: (f.opacidade ?? 12) ? opaco(cor, f.opacidade ?? 12, 'var(--background)') : undefined }}>
       <Redimensionar id={id} visivel={selected} minW={80} minH={60} alcas="!pointer-events-auto" />
-      <div className="alca pointer-events-auto absolute -top-6 left-0 flex max-w-full cursor-grab items-center text-[12px] font-medium active:cursor-grabbing" style={{ color: cor }}>
+      <div title={f.texto || 'Frame'} className="alca pointer-events-auto absolute bottom-full left-0 flex cursor-grab items-center overflow-hidden whitespace-nowrap pb-1 text-[13px] font-semibold active:cursor-grabbing [&_*]:truncate"
+        style={{ color: cor, maxWidth: largura, transform: `scale(${1 / zoom})`, transformOrigin: 'bottom left' }}>
         <Titulo no={id} valor={f.texto || 'Frame'} aoSalvar={(v) => editarForma(f, { texto: v || 'Frame' })} />
       </div>
     </div>
@@ -449,6 +544,38 @@ export const NoImagem = memo(function NoImagem({ id, data, selected }: NodeProps
   )
 })
 
+const COR_VIDEO = 'var(--ev-plano)'
+
+/** Vídeo que um agente mostrou no canvas (MCP mostrar_video) ou que foi solto no quadro. "Escolher esta versão" avisa o terminal ligado. */
+export const NoVideo = memo(function NoVideo({ id, data, selected }: NodeProps<Node<DadosForma>>) {
+  const { f } = data
+  const { escolherVideo } = useContext(Acoes)
+  const [aviso, setAviso] = useState<string | null>(null)
+  useEffect(() => { if (!aviso) return; const x = setTimeout(() => setAviso(null), 4000); return () => clearTimeout(x) }, [aviso])
+  // a versão é temporária: escolhida, o agente recebe e as versões do grupo saem do canvas
+  const escolher = async () => {
+    setAviso('Enviando a escolha…')
+    try { await escolherVideo(f) } catch (e) { setAviso((e as Error).message) }
+  }
+  return (
+    <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border-2 bg-card shadow-md" style={{ borderColor: mistura(COR_VIDEO, selected ? 90 : 50) }}>
+      <Redimensionar id={id} visivel={selected} minW={180} minH={160} />
+      <header className="alca flex cursor-grab items-center gap-2 px-3 py-1.5" style={{ background: mistura(COR_VIDEO, 14) }}>
+        <Film className="size-3.5 shrink-0" style={{ color: COR_VIDEO }} />
+        <Titulo no={id} valor={f.texto || 'Vídeo'} className="text-xs font-medium" aoSalvar={(v) => editarForma(f, { texto: v || 'Vídeo' })} />
+        {f.url && <a href={api(f.url)} target="_blank" rel="noreferrer" className="nodrag text-muted-foreground hover:text-foreground" title="Abrir em outra aba"><ExternalLink className="size-3.5" /></a>}
+      </header>
+      {f.url && <video src={api(f.url)} controls loop muted playsInline preload="metadata" className="nodrag nowheel min-h-0 w-full flex-1 bg-black object-contain" />}
+      <div className="nodrag flex items-center gap-2 border-t border-border/60 px-3 py-1.5">
+        <span className="flex-1 truncate text-[10px] text-muted-foreground">{aviso || 'Assista e escolha a melhor'}</span>
+        <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-[11px]" onClick={() => void escolher()}
+          title="Avisa o agente e tira do canvas as versões deste grupo (ex.: escolher a A2 tira da A1 à A5)"><Check className="size-3" />Escolher esta versão</Button>
+      </div>
+      <Lados cor={COR_VIDEO} />
+    </div>
+  )
+})
+
 /** Traço do lápis: pontos em 0..1, então o desenho estica junto com a caixa. */
 export function caminhoDoTraco(pontos: [number, number][], escala = 1000) {
   if (!pontos.length) return ''
@@ -479,5 +606,5 @@ export const NoDesenho = memo(function NoDesenho({ id, data, selected }: NodePro
 
 export const tiposDeNo = {
   terminal: NoTerminal, sessao: NoSessao, subagente: NoSubagente, nota: NoNota, checklist: NoChecklist,
-  frame: NoFrame, retangulo: NoRetangulo, texto: NoTexto, imagem: NoImagem, desenho: NoDesenho,
+  frame: NoFrame, retangulo: NoRetangulo, texto: NoTexto, imagem: NoImagem, desenho: NoDesenho, video: NoVideo,
 }

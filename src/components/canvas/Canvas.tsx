@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as EventoArraste, type MouseEvent as EventoMouse, type PointerEvent as EventoPonteiro } from 'react'
 import {
-  Background, BackgroundVariant, ConnectionMode, Controls, MiniMap, Panel, ReactFlow, ReactFlowProvider, SelectionMode, applyNodeChanges, useReactFlow,
+  Background, BackgroundVariant, ConnectionMode, Controls, MiniMap, Panel, ReactFlow, ReactFlowProvider, SelectionMode, applyNodeChanges, useReactFlow, useStore,
   type Connection, type Edge, type FinalConnectionState, type Node, type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
-  CircleStop, Crown, Eye, EyeOff, Frame as IconeFrame, Gauge, GitBranch, ImagePlus, Info, LayoutGrid, ListChecks, Maximize, Maximize2, MousePointer2, Pencil,
-  Play, Plus, RotateCcw, Send, Square, StickyNote, Terminal as IconeTerminal, Trash2, Type, Unlink, type LucideIcon,
+  CircleStop, Crown, Eye, EyeOff, Frame as IconeFrame, Gauge, GitBranch, ImagePlus, Info, LayoutDashboard, LayoutGrid, ListChecks, Maximize, Maximize2, MousePointer2, Pencil,
+  LocateFixed, Play, Plus, RotateCcw, Send, Square, StickyNote, Terminal as IconeTerminal, Trash2, Type, Unlink, type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,7 +30,7 @@ import { cortar, tiposDeAresta, type DadosAresta } from './arestas'
 import { LinhaDeLigacao } from './ligacao'
 import { LogoClaude, LogoCodex, type Icone } from './logos'
 import { Acoes, caminhoDoTraco, tiposDeNo, type AcoesCanvas, type DadosBloco, type DadosForma, type DadosSessao, type DadosSub, type DadosTerminal } from './nos'
-import { COR, LEGENDA, ROTULO_TIPO, ST, corDoTerminal, nomeDoTerminal } from './cores'
+import { COR, LEGENDA, ROTULO_TIPO, ST, corDoTerminal, iconeDoTerminal, nomeDoTerminal } from './cores'
 import { COR_WIDGET, ICONE_WIDGET, NOME_WIDGET, NoWidget, TAM_WIDGET, type DadosNoWidget, type ItemValidacao } from './widgets'
 
 const TIPOS_DE_NO = { ...tiposDeNo, widget: NoWidget }
@@ -39,6 +39,7 @@ const TAM: Record<string, { w: number; h: number }> = {
   terminal: { w: 680, h: 500 }, git: { w: 700, h: 600 }, sessao: { w: 300, h: 150 },
   subagente: { w: 230, h: 54 }, nota: { w: 280, h: 220 }, checklist: { w: 300, h: 300 },
   frame: { w: 480, h: 320 }, retangulo: { w: 200, h: 120 }, texto: { w: 240, h: 40 }, imagem: { w: 320, h: 240 }, desenho: { w: 100, h: 100 },
+  video: { w: 360, h: 400 },
 }
 
 // ---------- ferramentas do quadro (como no Figma) ----------
@@ -52,6 +53,42 @@ const FERRAMENTAS: { id: Ferramenta; rotulo: string; tecla: string; Icone: Lucid
   { id: 'lapis', rotulo: 'Lápis', tecla: 'P', Icone: Pencil },
 ]
 const CORES = ['#a1a1aa', '#f87171', '#fb923c', '#facc15', '#4ade80', '#2dd4bf', '#38bdf8', '#818cf8', '#e879f9', '#f5f5f5', '#18181b']
+const NOMES_COR = ['Cinza', 'Vermelho', 'Laranja', 'Amarelo', 'Verde', 'Turquesa', 'Azul', 'Anil', 'Rosa', 'Branco', 'Preto']
+
+/** Terminais de agente (Claude e Codex) na ordem do canvas: da esquerda para a direita, de cima para baixo. */
+const agentesDoCanvas = (nos: Node[]) => nos
+  .filter((n) => n.type === 'terminal' && ((n.data as DadosTerminal).t.tipo === 'claude' || (n.data as DadosTerminal).t.tipo === 'codex'))
+  .sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y)
+
+/** No dock: lista os agentes do canvas; clicar leva a visão até o frame dele, sem rolar o canvas. */
+function IrAteAgente({ nos, aoIr }: { nos: Node[]; aoIr: (id: string) => void }) {
+  const [aberto, setAberto] = useState(false)
+  const agentes = agentesDoCanvas(nos)
+  return (
+    <Popover open={aberto} onOpenChange={setAberto}>
+      <PopoverTrigger asChild>
+        <Button size="icon" variant="ghost" className="size-8 rounded-lg" title="Ir até um agente · Tab: próximo · Shift+Tab: anterior · segurando Tab, as setas andam só entre os que estão trabalhando" disabled={!agentes.length}>
+          <LocateFixed className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent side="top" sideOffset={14} className="flex max-h-80 w-72 flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1">
+        <p className="px-2 pt-1 pb-1.5 text-[11px] text-muted-foreground">Ir até o agente</p>
+        {agentes.map((n) => {
+          const { t, sessao } = n.data as DadosTerminal
+          const Icone = iconeDoTerminal(t)
+          const st = ST[t.status]
+          return (
+            <button key={n.id} onClick={() => { setAberto(false); aoIr(n.id) }} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent">
+              <Icone className="size-3.5 shrink-0" style={{ color: corDoTerminal(t) }} />
+              <span className="min-w-0 flex-1 truncate" title={nomeDoTerminal(t, sessao)}>{nomeDoTerminal(t, sessao)}</span>
+              <span className="size-2 shrink-0 rounded-full" style={{ background: st.cor }} title={st.rotulo} />
+            </button>
+          )
+        })}
+      </PopoverContent>
+    </Popover>
+  )
+}
 const TAMANHOS_TEXTO: [string, number][] = [['Pequeno', 14], ['Médio', 18], ['Grande', 32], ['Título', 56]]
 
 /** Foco num campo, no terminal ou num texto em edição: as teclas e o colar são dele, não do quadro. */
@@ -71,6 +108,32 @@ const medidaDaImagem = (arq: Blob) => createImageBitmap(arq).then((b) => { const
 const SUB_RECENTE = 15 * 60 * 1000
 
 const salvar = (posicoes: Record<string, Posicao>) => { void enviar('PUT', '/api/canvas', { posicoes }).catch(() => {}) }
+
+/** Grupo da versão pelo começo do título: "A2: Antes e agora" -> "A", "Versão 3" -> "Versão". Sem número, não tem grupo. */
+const grupoDoVideo = (titulo: string) => /^\s*([A-Za-zÀ-ÿ]+)\s*\d+\b/.exec(titulo || '')?.[1]?.toLowerCase() || null
+
+/** Subagente fica sempre em fila logo embaixo do nó pai (terminal ou sessão), inclusive enquanto o pai é arrastado.
+ *  Antes ele só se posicionava ao aparecer: se o terminal ou o frame andasse, o subagente ficava longe, fora da vista. */
+function prenderSubagentes(ns: Node[]): Node[] {
+  const porId = new Map(ns.map((n) => [n.id, n]))
+  const fila = new Map<string, number>()
+  let mudou = false
+  const out = ns.map((n) => {
+    if (n.type !== 'subagente') return n
+    const pai = porId.get((n.data as { pai?: string }).pai || '')
+    if (!pai) return n
+    const k = fila.get(pai.id) || 0
+    fila.set(pai.id, k + 1)
+    const w = (n.width as number) || TAM.subagente.w
+    const alturaPai = (pai.height as number) || pai.measured?.height || 150
+    const x = pai.position.x + k * (w + 14)
+    const y = pai.position.y + alturaPai + 28
+    if (n.position.x === x && n.position.y === y) return n
+    mudou = true
+    return { ...n, position: { x, y } }
+  })
+  return mudou ? out : ns
+}
 const lerLocal = (k: string, padrao: string) => { try { return localStorage.getItem(k) ?? padrao } catch { return padrao } }
 const gravarLocal = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* sem armazenamento */ } }
 
@@ -220,42 +283,53 @@ function Desenhar({ ferramenta, cor, aoCriar }: {
   const local = (e: EventoPonteiro) => { const r = ref.current!.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top } }
   const noQuadro = (e: EventoPonteiro) => screenToFlowPosition({ x: e.clientX, y: e.clientY })
 
-  // o arraste vive na ref: o mouse rápido manda movimentos antes de o React redesenhar
-  const arraste = useRef<{ a: { x: number; y: number }; b: { x: number; y: number }; tela: [number, number][] } | null>(null)
+  // o arraste vive na ref, em coordenadas do quadro: se a tela andar ou der zoom no meio do traço, a prévia vai junto
+  const arraste = useRef<{ a: { x: number; y: number }; b: { x: number; y: number }; telaA: { x: number; y: number }; longe: number } | null>(null)
+  // botão do meio arrasta o quadro mesmo com a ferramenta ligada, como no modo normal
+  const andando = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null)
   const descer = (e: EventoPonteiro) => {
+    if (e.button === 1) {
+      e.preventDefault()
+      e.currentTarget.setPointerCapture(e.pointerId)
+      const v = getViewport()
+      andando.current = { x: e.clientX, y: e.clientY, vx: v.x, vy: v.y }
+      return
+    }
     if (e.button !== 0) return
     e.currentTarget.setPointerCapture(e.pointerId)
-    const p = local(e)
     const q = noQuadro(e)
     traco.current = [[q.x, q.y]]
-    arraste.current = { a: p, b: p, tela: [[p.x, p.y]] }
-    setTela({ a: p, b: p, traco: [[p.x, p.y]] })
+    arraste.current = { a: q, b: q, telaA: local(e), longe: 0 }
+    setTela({ a: q, b: q, traco: [[q.x, q.y]] })
   }
   const mover = (e: EventoPonteiro) => {
+    const anda = andando.current
+    if (anda) { void setViewport({ ...getViewport(), x: anda.vx + e.clientX - anda.x, y: anda.vy + e.clientY - anda.y }); return }
     const d = arraste.current
     if (!d) return
-    d.b = local(e)
-    if (ferramenta === 'lapis') {
-      const q = noQuadro(e)
-      traco.current.push([q.x, q.y])
-      d.tela = [...d.tela, [d.b.x, d.b.y]]
-    }
-    setTela({ a: d.a, b: d.b, traco: d.tela })
+    const p = local(e)
+    d.longe = Math.max(d.longe, Math.hypot(p.x - d.telaA.x, p.y - d.telaA.y))
+    d.b = noQuadro(e)
+    if (ferramenta === 'lapis') traco.current.push([d.b.x, d.b.y])
+    setTela({ a: d.a, b: d.b, traco: ferramenta === 'lapis' ? [...traco.current] : [] })
   }
   const subir = (e: EventoPonteiro) => {
+    if (andando.current) { andando.current = null; return }
     const d = arraste.current
     if (!d) return
     arraste.current = null
-    d.b = local(e)
     const fim = noQuadro(e)
     if (ferramenta === 'lapis') traco.current.push([fim.x, fim.y])
     const [ix, iy] = traco.current[0]
     const inicio = { x: ix, y: iy }
-    const pequeno = Math.abs(d.b.x - d.a.x) < 6 && Math.abs(d.b.y - d.a.y) < 6
+    const p = local(e)
+    const longe = Math.max(d.longe, Math.hypot(p.x - d.telaA.x, p.y - d.telaA.y))
+    const pequeno = longe < 6
     setTela(null)
     if (ferramenta === 'lapis') {
       const pts = traco.current
-      if (pts.length < 2) return
+      // clique sem arrastar não vira traço: era o que deixava pontinhos soltos pelo quadro
+      if (pts.length < 2 || longe < 4) return
       const xs = pts.map((p) => p[0])
       const ys = pts.map((p) => p[1])
       const x = Math.min(...xs)
@@ -272,16 +346,21 @@ function Desenhar({ ferramenta, cor, aoCriar }: {
     aoCriar(ferramenta === 'texto' ? 'texto' : ferramenta, caixa, { cor: ferramenta === 'texto' ? (cor === CORES[0] ? 'var(--foreground)' : cor) : cor })
   }
 
+  // prévia: pontos do quadro levados para a tela com o zoom e a posição de agora
+  const [vx, vy, zoom] = useStore((s) => s.transform)
+  const naTela = (p: { x: number; y: number }) => ({ x: p.x * zoom + vx, y: p.y * zoom + vy })
   const ret = tela && ferramenta !== 'lapis' && ferramenta !== 'texto'
-    ? { left: Math.min(tela.a.x, tela.b.x), top: Math.min(tela.a.y, tela.b.y), width: Math.abs(tela.b.x - tela.a.x), height: Math.abs(tela.b.y - tela.a.y) }
+    ? (() => { const a = naTela(tela.a), b = naTela(tela.b); return { left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) } })()
     : null
   return (
     <div ref={ref} className={cn('absolute inset-0 z-[5]', ferramenta === 'texto' ? 'cursor-text' : 'cursor-crosshair')}
-      onPointerDown={descer} onPointerMove={mover} onPointerUp={subir} onContextMenu={(e) => e.preventDefault()}>
+      onPointerDown={descer} onPointerMove={mover} onPointerUp={subir} onPointerCancel={() => { arraste.current = null; andando.current = null; setTela(null) }}
+      onContextMenu={(e) => e.preventDefault()}>
       {ret && <div className="pointer-events-none absolute rounded-md border-2" style={{ ...ret, borderColor: cor, background: ferramenta === 'frame' ? 'transparent' : `color-mix(in oklch, ${cor} 22%, transparent)` }} />}
       {tela && ferramenta === 'lapis' && (
         <svg className="pointer-events-none absolute inset-0 h-full w-full">
-          <path d={caminhoDoTraco(tela.traco, 1)} fill="none" stroke={cor} strokeWidth={3 * getViewport().zoom} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={caminhoDoTraco(tela.traco.map(([x, y]) => { const q = naTela({ x, y }); return [q.x, q.y] as [number, number] }), 1)}
+            fill="none" stroke={cor} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )}
     </div>
@@ -337,10 +416,18 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
     const ids = new Set(doServidor.map((f) => f.id))
     return [...doServidor, ...extras.filter((f) => !ids.has(f.id))]
   }, [canvas.formas, extras])
-  useEffect(() => {
-    const ids = new Set((canvas.formas ?? []).map((f) => f.id))
-    setExtras((xs) => (xs.some((f) => ids.has(f.id)) ? xs.filter((f) => !ids.has(f.id)) : xs))
-  }, [canvas.formas])
+  // forma recém-criada aparece na hora (extras) até o servidor mandá-la. Se ela for apagada ou desfeita antes
+  // disso, nunca chega: depois de 3 s sem aparecer no servidor, sai da lista (antes ela voltava sozinha)
+  const nascidas = useRef(new Map<string, number>())
+  const podarExtras = useCallback(() => {
+    const ids = new Set((canvasRef.current.formas ?? []).map((f) => f.id))
+    const agora = Date.now()
+    setExtras((xs) => {
+      const ficam = xs.filter((f) => !ids.has(f.id) && agora - (nascidas.current.get(f.id) ?? 0) < 3000)
+      return ficam.length === xs.length ? xs : ficam
+    })
+  }, []) // canvasRef é declarado mais abaixo (desfazer/refazer); só é lido quando a poda roda, depois do render
+  useEffect(() => { podarExtras() }, [canvas.formas, podarExtras])
 
   const porSessao = useMemo(() => new Map(sessoes.map((s) => [s.id, s])), [sessoes])
   const terminalDaSessao = useMemo(() => new Map(canvas.terminais.filter((t) => t.sessao).map((t) => [t.sessao!, t])), [canvas.terminais])
@@ -454,10 +541,11 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
         const id = `b:${b.id}`
         por({ id, type: b.tipo, dragHandle: '.alca', ...lugar(id, TAM[b.tipo]), selected: marcado(id), data: { b, ligados: ligadosA.get(id) || 0 } satisfies DadosBloco })
       }
-      for (const x of subs) por({ id: x.id, type: 'subagente', dragHandle: undefined, ...lugar(x.id, TAM.subagente, x.pai, true), selected: marcado(x.id), data: x.d })
+      // subagente não arrasta sozinho: fica preso embaixo do pai (prenderSubagentes)
+      for (const x of subs) por({ id: x.id, type: 'subagente', dragHandle: undefined, draggable: false, ...lugar(x.id, TAM.subagente, x.pai, true), selected: marcado(x.id), data: { ...x.d, pai: x.pai } })
       for (const f of formas) if (f.tipo !== 'frame') forma(f)
       if (Object.keys(novos).length) salvar(novos)
-      return prontos
+      return prenderSubagentes(prontos)
     })
   }, [canvas, formas, fora, porSessao, noDaSessao, ligadosA, subs, validacoes])
 
@@ -560,7 +648,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
   const fotoArraste = useRef<Record<string, Posicao>>({})
   const fotoRedimensionar = useRef<Record<string, Posicao>>({})
 
-  const aoMudar = useCallback((ch: NodeChange[]) => setNos((ns) => applyNodeChanges(ch, ns)), [])
+  const aoMudar = useCallback((ch: NodeChange[]) => setNos((ns) => prenderSubagentes(applyNodeChanges(ch, ns))), [])
 
   // Frame como no Figma: o que está inteiro dentro dele anda junto quando ele é arrastado
   const dentroDoFrame = useRef<{ frame: string; inicio: { x: number; y: number }; filhos: Map<string, { x: number; y: number }> } | null>(null)
@@ -612,6 +700,17 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       registrar(passoMovimento(fotoRedimensionar.current, { ...fotoRedimensionar.current, [no]: p }))
     },
     migrar: (sessao) => migrarRef.current(sessao),
+    escolherVideo: async (f) => {
+      const r = await enviar<{ resultados: { resultado: string }[] }>('POST', `/api/formas/${f.id}/escolher`)
+      // versões são temporárias: saem do canvas todas as do mesmo grupo, ligadas ao mesmo agente
+      const { formas: todas = [], ligacoes } = canvasRef.current
+      const vizinhos = (fid: string) => new Set(ligacoes.flatMap((l) => (l.de === `f:${fid}` ? [l.para] : l.para === `f:${fid}` ? [l.de] : [])).filter((x) => x.startsWith('t:')))
+      const agentes = vizinhos(f.id)
+      const grupo = grupoDoVideo(f.texto)
+      const saem = todas.filter((x) => x.tipo === 'video' && (x.id === f.id || (grupo && grupoDoVideo(x.texto) === grupo && [...vizinhos(x.id)].some((t) => agentes.has(t)))))
+      for (const x of saem) await enviar('DELETE', `/api/formas/${x.id}`).catch(() => {})
+      return { ...r, saiu: saem.length }
+    },
   }), [aoAbrir, editando])
 
   // ---------- criar coisas (barra e menu) ----------
@@ -654,7 +753,9 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
     const f = await enviar<Forma>('POST', '/api/formas', { tipo, ...caixa, ...dados })
     registrar(passoFormaCriada(f, caixa))
     pendentes.current.set(`f:${f.id}`, caixa)
+    nascidas.current.set(f.id, Date.now())
     setExtras((xs) => [...xs, f])
+    setTimeout(podarExtras, 3100)
     setNos((ns) => ns.map((n) => ({ ...n, selected: false })))
     if (tipo === 'texto' && !dados.texto) setEditando(`f:${f.id}`)
     return f
@@ -706,11 +807,15 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
     return () => { window.removeEventListener('keydown', tecla); window.removeEventListener('paste', colar) }
   }, [])
   const soltarArquivos = (e: EventoArraste) => {
-    const imgs = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'))
-    if (!imgs.length) return
+    const arqs = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/') || f.type === 'video/mp4' || f.type === 'video/webm')
+    if (!arqs.length) return
     e.preventDefault()
     const p = screenToFlowPosition({ x: e.clientX, y: e.clientY })
-    imgs.forEach((arq, i) => void colocarImagem(arq, { x: p.x + i * 40, y: p.y + i * 40 }).catch(() => {}))
+    arqs.forEach((arq, i) => {
+      const q = { x: p.x + i * 40, y: p.y + i * 40 }
+      if (arq.type.startsWith('image/')) void colocarImagem(arq, q).catch(() => {})
+      else void subirImagem(arq).then((url) => criarForma('video', { ...q, ...TAM.video }, { url, texto: arq.name.replace(/\.\w+$/, '') })).catch(() => {})
+    })
   }
   const terminalSelecionado = () => nos.find((n) => n.selected && (n.type === 'terminal' || n.type === 'sessao'))?.id
   const alternarFora = () => setMostrarFora((v) => { gravarLocal('canvas-fora', v ? '0' : '1'); return !v })
@@ -746,6 +851,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
         'separador',
         { rotulo: mostrarFora ? 'Esconder sessões de fora' : 'Mostrar sessões de fora', Icone: mostrarFora ? EyeOff : Eye, acao: alternarFora },
         ...(fora.some((s) => s.agente === 'claude') ? [{ rotulo: `Migrar todas as sessões de fora (${fora.filter((s) => s.agente === 'claude').length})`, Icone: IconeTerminal, cor: COR.claude, acao: () => void migrarTodas() } as ItemMenu] : []),
+        { rotulo: 'Organizar em frames por agente', Icone: LayoutDashboard, acao: () => void organizar() },
         { rotulo: 'Ajustar à tela', Icone: Maximize, acao: () => void fitView({ maxZoom: 0.9, padding: 0.12, duration: 300 }) },
     ]
   }
@@ -790,10 +896,16 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       ]
     } else if (n.type === 'nota' || n.type === 'checklist') {
       const b = (n.data as DadosBloco).b
+      const tipo = n.type
+      const corBloco = (c: string) => void enviar('PATCH', `/api/blocos/${b.id}`, { cor: c }).catch(() => {})
       titulo = b.titulo
       itens = [
         { rotulo: n.type === 'nota' ? 'Enviar aos terminais ligados' : 'Executar nos terminais ligados', Icone: Send, acao: () => void enviar('POST', `/api/blocos/${b.id}/enviar`).catch(() => {}) },
         { rotulo: 'Renomear', Icone: Pencil, acao: () => setEditando(n.id) },
+        { rotulo: 'Cor', Icone: Square, cor: b.cor || COR[tipo], sub: [
+          { rotulo: `Padrão${b.cor ? '' : ' ✓'}`, Icone: tipo === 'nota' ? StickyNote : ListChecks, cor: COR[tipo], acao: () => corBloco('') },
+          ...CORES.map((c, i) => ({ rotulo: `${NOMES_COR[i]}${b.cor === c ? ' ✓' : ''}`, Icone: Square, cor: c, acao: () => corBloco(c) })),
+        ] },
         'separador',
         { rotulo: n.type === 'nota' ? 'Apagar nota' : 'Apagar checklist', Icone: Trash2, perigo: true, acao: () => {
           const passo = passoBlocoApagado(n.id) // copia o conteúdo antes de apagar, para o Ctrl+Z trazer de volta
@@ -802,17 +914,21 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       ]
     } else if (n.id.startsWith('f:')) {
       const f = (n.data as DadosForma).f
-      const NOME: Record<TipoForma, string> = { frame: 'Frame', retangulo: 'Retângulo', texto: 'Texto', imagem: 'Imagem', desenho: 'Desenho' }
-      titulo = f.tipo === 'frame' ? f.texto || 'Frame' : NOME[f.tipo]
+      const NOME: Record<TipoForma, string> = { frame: 'Frame', retangulo: 'Retângulo', texto: 'Texto', imagem: 'Imagem', desenho: 'Desenho', video: 'Vídeo' }
+      titulo = f.tipo === 'frame' || f.tipo === 'video' ? f.texto || NOME[f.tipo] : NOME[f.tipo]
       const mudar = (dados: Partial<Forma>) => void enviar('PATCH', `/api/formas/${f.id}`, dados).catch(() => {})
       itens = [
-        ...(f.tipo === 'frame' ? [{ rotulo: 'Renomear', Icone: Pencil, acao: () => setEditando(n.id) } as ItemMenu] : []),
+        ...(f.tipo === 'frame' ? [
+          { rotulo: 'Renomear', Icone: Pencil, acao: () => setEditando(n.id) } as ItemMenu,
+          { rotulo: 'Cor', Icone: Square, cor: f.cor || CORES[0], sub: CORES.map((c, i) => ({ rotulo: `${NOMES_COR[i]}${f.cor === c ? ' ✓' : ''}`, Icone: Square, cor: c, acao: () => mudar({ cor: c }) })) } as ItemMenu,
+          { rotulo: 'Tom do fundo', Icone: Square, sub: [0, 5, 12, 20, 35, 50, 75].map((o) => ({ rotulo: `${o === 0 ? 'Sem fundo' : `${o}%`}${(f.opacidade ?? 12) === o ? ' ✓' : ''}`, acao: () => mudar({ opacidade: o }) })) } as ItemMenu,
+        ] : []),
         ...(f.tipo === 'texto' ? [
           { rotulo: 'Editar texto', Icone: Pencil, acao: () => setEditando(n.id) } as ItemMenu,
           ...TAMANHOS_TEXTO.map(([r, t]) => ({ rotulo: `${r}${(f.tamanho || 18) === t ? ' ✓' : ''}`, Icone: Type, acao: () => mudar({ tamanho: t }) }) as ItemMenu),
         ] : []),
         ...(f.tipo === 'desenho' ? [1, 3, 6, 12].map((e) => ({ rotulo: `Traço ${e}${(f.espessura || 3) === e ? ' ✓' : ''}`, Icone: Pencil, acao: () => mudar({ espessura: e }) }) as ItemMenu) : []),
-        ...(f.tipo !== 'imagem' ? [{ rotulo: 'Usar a cor escolhida na barra', Icone: Square, cor, acao: () => mudar({ cor }) } as ItemMenu] : []),
+        ...(f.tipo !== 'imagem' && f.tipo !== 'video' && f.tipo !== 'frame' ? [{ rotulo: 'Usar a cor escolhida na barra', Icone: Square, cor, acao: () => mudar({ cor }) } as ItemMenu] : []),
         { rotulo: 'Apagar', Icone: Trash2, perigo: true, acao: () => void enviar('DELETE', `/api/formas/${f.id}`).then(() => registrar(passoFormaApagada(f, { x: n.position.x, y: n.position.y, w: n.width as number, h: n.height as number }))).catch(() => {}) },
         'separador',
         ...itensDoFundo(screenToFlowPosition({ x: e.clientX, y: e.clientY })),
@@ -843,6 +959,216 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
     const d = ed.data as DadosAresta | undefined
     if (!d?.ligacao && !d?.soltar) return
     setMenu({ x: e.clientX, y: e.clientY, itens: [{ rotulo: d.soltar ? 'Soltar este terminal' : 'Cortar ligação', Icone: Unlink, perigo: true, acao: () => cortar(d, ed.source, ed.target) }] })
+  }
+
+  // ---------- Ir até um agente (dock): a visão vai até o frame em que ele está; fora de frame, até o terminal ----------
+  const irAte = (id: string) => {
+    const lista = nosRef.current
+    const n = lista.find((x) => x.id === id)
+    if (!n) return
+    const larg = (x: Node) => (x.width as number) || x.measured?.width || 0
+    const alt = (x: Node) => (x.height as number) || x.measured?.height || 0
+    const cx = n.position.x + larg(n) / 2
+    const cy = n.position.y + alt(n) / 2
+    const frame = lista
+      .filter((f) => f.type === 'frame' && cx >= f.position.x && cx <= f.position.x + larg(f) && cy >= f.position.y && cy <= f.position.y + alt(f))
+      .sort((a, b) => larg(a) * alt(a) - larg(b) * alt(b))[0]
+    void fitView({ nodes: [{ id: frame?.id ?? id }], padding: 0.06, maxZoom: 1, duration: 400 })
+  }
+
+  // Tab vai ao próximo agente (Shift+Tab, ao anterior); segurando Tab, as setas andam só entre os que estão trabalhando.
+  // Com um terminal selecionado ou com foco, ou num campo, o Tab continua sendo dele.
+  const ultimoAgente = useRef<string | null>(null)
+  const [aviso, setAviso] = useState<string | null>(null)
+  const irAteRef = useRef(irAte)
+  irAteRef.current = irAte
+  useEffect(() => {
+    let segurando = false
+    let usouSeta = false
+    let timer = 0
+    const avisar = (texto: string) => { setAviso(texto); clearTimeout(timer); timer = window.setTimeout(() => setAviso(null), 1800) }
+    const andar = (passo: number, soTrabalhando: boolean) => {
+      const lista = agentesDoCanvas(nosRef.current).filter((n) => !soTrabalhando || (n.data as DadosTerminal).t.status === 'trabalhando')
+      if (!lista.length) { avisar(soTrabalhando ? 'Nenhum agente trabalhando agora' : 'Nenhum agente no canvas'); return }
+      const i = lista.findIndex((n) => n.id === ultimoAgente.current)
+      const j = ((i < 0 ? (passo > 0 ? -1 : 0) : i) + passo + lista.length) % lista.length
+      const { t, sessao } = lista[j].data as DadosTerminal
+      ultimoAgente.current = lista[j].id
+      irAteRef.current(lista[j].id)
+      avisar(`${nomeDoTerminal(t, sessao)} · ${j + 1}/${lista.length}${soTrabalhando ? ' trabalhando' : ''}`)
+    }
+    const SETAS = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp']
+    const desce = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        // terminal com foco ou selecionado: o Tab é dele (completar, trocar de modo no Claude)
+        if (e.ctrlKey || e.metaKey || e.altKey || digitando() || nosRef.current.some((n) => n.selected && n.type === 'terminal')) return
+        e.preventDefault()
+        if (!e.repeat) { segurando = true; usouSeta = false }
+        return
+      }
+      if (segurando && SETAS.includes(e.key)) {
+        // na captura, antes do React Flow, que moveria o nó selecionado com as setas
+        e.preventDefault()
+        e.stopPropagation()
+        usouSeta = true
+        andar(e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1, true)
+      }
+    }
+    const sobe = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !segurando) return
+      segurando = false
+      if (!usouSeta) andar(e.shiftKey ? -1 : 1, false)
+    }
+    const solta = () => { segurando = false }
+    window.addEventListener('keydown', desce, true)
+    window.addEventListener('keyup', sobe, true)
+    window.addEventListener('blur', solta)
+    return () => {
+      window.removeEventListener('keydown', desce, true)
+      window.removeEventListener('keyup', sobe, true)
+      window.removeEventListener('blur', solta)
+      clearTimeout(timer)
+    }
+  }, [])
+
+  // ---------- Organizar: um frame por frente (cada agente e o que é dele), lado a lado ----------
+  // dentro do frame: notas e checklists à esquerda, o terminal no centro com subagentes, trabalhadores e vídeos
+  // embaixo, Git e widgets à direita. O resto vai numa fila embaixo, e as sessões de fora numa fila no fim.
+  const organizar = async () => {
+    const lista = nosRef.current
+    const porId = new Map(lista.map((n) => [n.id, n]))
+    const tam = (id: string) => { const n = porId.get(id)!; return { w: (n.width as number) || n.measured?.width || 300, h: (n.height as number) || n.measured?.height || 200 } }
+    const ligadosA = (no: string) => canvas.ligacoes.flatMap((l) => (l.de === no ? [l.para] : l.para === no ? [l.de] : []))
+    const conteudo = lista.filter((n) => !n.id.startsWith('f:'))
+    if (!conteudo.length) return
+    const antes = foto()
+    const novas: Record<string, Posicao> = {}
+    const usados = new Set<string>()
+    const por = (id: string, x: number, y: number, t = tam(id)) => { novas[id] = { x: Math.round(x), y: Math.round(y), w: t.w, h: t.h }; usados.add(id) }
+    const PAD = 40, VAO = 40, ENTRE = 220
+    const CORES_FRENTE = ['#fb923c', '#38bdf8', '#e879f9', '#4ade80', '#facc15', '#818cf8', '#2dd4bf', '#f87171']
+    const x0 = Math.min(...conteudo.map((n) => n.position.x))
+    const y0 = Math.min(...conteudo.map((n) => n.position.y))
+    const feita = (id: string) => { const b = (porId.get(id)!.data as DadosBloco).b; return b.itens.length > 0 && b.itens.every((i) => i.estado === 'feito') }
+    const raizes = canvas.terminais
+      .filter((t) => !t.pai && !t.paiSessao && (t.tipo === 'claude' || t.tipo === 'codex') && porId.has(`t:${t.id}`))
+      .sort((a, b) => porId.get(`t:${a.id}`)!.position.x - porId.get(`t:${b.id}`)!.position.x)
+    const frames = lista.filter((n) => n.type === 'frame')
+    const novosFrames: { caixa: { x: number; y: number; w: number; h: number }; texto: string; cor: string }[] = []
+    let fx = x0
+    let fundo = y0
+
+    raizes.forEach((r, i) => {
+      const rid = `t:${r.id}`
+      const desc: Terminal[] = []
+      const fila = [r.id]
+      while (fila.length) { const p = fila.shift()!; for (const t of canvas.terminais) if (t.pai === p && porId.has(`t:${t.id}`)) { desc.push(t); fila.push(t.id) } }
+      const membros = [rid, ...desc.map((t) => `t:${t.id}`)]
+      const ligados = [...new Set(membros.flatMap(ligadosA))].filter((x) => porId.has(x) && !usados.has(x) && !membros.includes(x))
+      const esquerda = [...ligados.filter((x) => porId.get(x)!.type === 'nota'), ...ligados.filter((x) => porId.get(x)!.type === 'checklist').sort((a, b) => Number(feita(a)) - Number(feita(b)))]
+      const direita = [...desc.filter((t) => t.tipo === 'git').map((t) => `t:${t.id}`), ...ligados.filter((x) => x.startsWith('w:'))]
+      const trabs = desc.filter((t) => t.tipo !== 'git').map((t) => `t:${t.id}`)
+      const midias = ligados.filter((x) => porId.get(x)!.type === 'video' || porId.get(x)!.type === 'imagem')
+      const seusSubs = subs.filter((s) => membros.includes(s.pai) && porId.has(s.id)).map((s) => s.id)
+
+      const fy = y0
+      const lx = fx + PAD
+      let ly = fy + PAD
+      const L = esquerda.length ? Math.max(...esquerda.map((x) => tam(x).w)) : 0
+      for (const x of esquerda) { por(x, lx, ly); ly += tam(x).h + VAO }
+      const cx = lx + (L ? L + VAO * 2 : 0)
+      const rt = tam(rid)
+      const rn = porId.get(rid)!
+      const centroAntes = { x: rn.position.x + rt.w / 2, y: rn.position.y + rt.h / 2 }
+      por(rid, cx, fy + PAD)
+      let cy = fy + PAD + rt.h
+      let largura = rt.w
+      const linha = (ids: string[], y: number, gap: number) => {
+        let x = cx
+        let alto = 0
+        for (const id of ids) { const t = tam(id); por(id, x, y, t); x += t.w + gap; alto = Math.max(alto, t.h) }
+        largura = Math.max(largura, x - gap - cx)
+        return alto
+      }
+      if (seusSubs.length) cy += 28 + linha(seusSubs, cy + 28, 14)
+      if (trabs.length) cy += 90 + linha(trabs, cy + 90, 50)
+      if (midias.length) {
+        const mw = Math.max(...midias.map((x) => tam(x).w))
+        const mh = Math.max(...midias.map((x) => tam(x).h))
+        const porLinha = Math.max(1, Math.floor((largura + 24) / (mw + 24)))
+        const y1 = cy + 60
+        midias.forEach((id, k) => por(id, cx + (k % porLinha) * (mw + 24), y1 + Math.floor(k / porLinha) * (mh + 24)))
+        cy = y1 + Math.ceil(midias.length / porLinha) * (mh + 24) - 24
+        largura = Math.max(largura, Math.min(midias.length, porLinha) * (mw + 24) - 24)
+      }
+      const rx = cx + largura + VAO * 2
+      let ry = fy + PAD
+      for (const x of direita) { por(x, rx, ry); ry += tam(x).h + VAO }
+      const fim = direita.length ? rx + Math.max(...direita.map((x) => tam(x).w)) : cx + largura
+      const caixa = { x: fx, y: fy, w: fim + PAD - fx, h: Math.max(ly - VAO, cy, ry - VAO) + PAD - fy }
+      // frame que já envolvia o agente é reaproveitado (mantém nome e cor); se não houver, nasce um
+      const fr = frames.find((f) => {
+        if (usados.has(f.id)) return false
+        const t = tam(f.id)
+        return centroAntes.x >= f.position.x && centroAntes.x <= f.position.x + t.w && centroAntes.y >= f.position.y && centroAntes.y <= f.position.y + t.h
+      })
+      if (fr) por(fr.id, caixa.x, caixa.y, { w: caixa.w, h: caixa.h })
+      else novosFrames.push({ caixa, texto: nomeDoTerminal(r, r.sessao ? porSessao.get(r.sessao) || null : null), cor: CORES_FRENTE[i % CORES_FRENTE.length] })
+      fx += caixa.w + ENTRE
+      fundo = Math.max(fundo, caixa.y + caixa.h)
+    })
+
+    // o que não é de nenhuma frente: fila embaixo, quebrando na largura das frentes
+    const larguraTotal = Math.max(fx - x0 - ENTRE, 2400)
+    const soltos = lista.filter((n) => !usados.has(n.id) && !n.id.startsWith('f:') && !n.id.startsWith('s:') && !n.id.startsWith('sub:')
+      && !(n.type === 'terminal' && (n.data as DadosTerminal).t.paiSessao))
+    if (soltos.length) {
+      let sx = x0
+      let sy = fundo + ENTRE
+      let alto = 0
+      for (const n of soltos) {
+        const t = tam(n.id)
+        if (sx > x0 && sx + t.w > x0 + larguraTotal) { sx = x0; sy += alto + VAO * 2; alto = 0 }
+        por(n.id, sx, sy, t)
+        sx += t.w + VAO * 2
+        alto = Math.max(alto, t.h)
+      }
+      fundo = sy + alto
+    }
+
+    // sessões de fora: fila no fim, cada uma com seus subagentes e trabalhadores embaixo
+    let qx = x0
+    const qy = fundo + ENTRE
+    for (const s of lista.filter((n) => n.id.startsWith('s:'))) {
+      const t = tam(s.id)
+      por(s.id, qx, qy, t)
+      let largura = t.w
+      let y = qy + t.h + 28
+      const fileira = (ids: string[], gap: number) => {
+        let x = qx
+        let alto = 0
+        for (const id of ids) { const u = tam(id); por(id, x, y, u); x += u.w + gap; alto = Math.max(alto, u.h) }
+        largura = Math.max(largura, x - gap - qx)
+        return alto
+      }
+      const seus = subs.filter((x) => x.pai === s.id && porId.has(x.id)).map((x) => x.id)
+      if (seus.length) y += fileira(seus, 14) + 90
+      fileira(canvas.terminais.filter((tt) => tt.paiSessao === s.id.slice(2) && porId.has(`t:${tt.id}`)).map((tt) => `t:${tt.id}`), 50)
+      qx += largura + VAO * 3
+    }
+
+    if (!Object.keys(novas).length && !novosFrames.length) return
+    // a sessão de fora cresce com o conteúdo: não fixa a altura dela
+    setNos((ns) => ns.map((n) => {
+      const p = novas[n.id]
+      if (!p) return n
+      return n.type === 'sessao' ? { ...n, position: { x: p.x, y: p.y } } : { ...n, position: { x: p.x, y: p.y }, width: p.w, height: p.h }
+    }))
+    const guardadas = Object.fromEntries(Object.entries(novas).filter(([k]) => !k.startsWith('sub:')))
+    salvar(guardadas)
+    registrar(passoMovimento(antes, { ...antes, ...guardadas }))
+    for (const f of novosFrames) await criarForma('frame', f.caixa, { texto: f.texto, cor: f.cor }).catch(() => {})
+    setTimeout(() => void fitView({ padding: 0.08, duration: 400 }), 150)
   }
 
   const antesDeApagar = async ({ nodes: ns, edges }: { nodes: Node[]; edges: Edge[] }) => {
@@ -927,6 +1253,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
           if (n.type === 'sessao') return AGENTES[(n.data as DadosSessao).s.agente].cor
           if (n.type === 'widget') return COR_WIDGET[(n.data as DadosNoWidget).w.tipo]
           if (n.id.startsWith('f:')) return (n.data as DadosForma).f.cor || 'var(--muted-foreground)'
+          if (n.type === 'nota' || n.type === 'checklist') return (n.data as DadosBloco).b.cor || COR[n.type]
           return COR[n.type as keyof typeof COR] || COR.sessao
         }} />
         {/* ilha embaixo, como no Figma: ferramentas de desenho, cor e o que abre no canvas */}
@@ -960,6 +1287,10 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
           <Button size="icon" variant="ghost" className="size-8 rounded-lg" title="Checklist (com um terminal selecionado, já nasce ligada a ele)" onClick={() => void criarBloco('checklist', undefined, terminalSelecionado()).catch(() => {})}><ListChecks className="size-4" style={{ color: COR.checklist }} /></Button>
           <Button size="icon" variant="ghost" className="size-8 rounded-lg" title="Janela do Git" onClick={() => void criarTerminal({ tipo: 'git', cwd: pastaPadrao, titulo: 'Git' }).catch(() => {})}><GitBranch className="size-4" style={{ color: COR.git }} /></Button>
           <span className="mx-1 h-5 w-px bg-border" />
+          <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg px-2.5" title="Organizar: um frame por agente, com as notas, checklists, Git, widgets e vídeos dele; o resto numa fila embaixo (Ctrl+Z desfaz)" onClick={() => void organizar()}>
+            <LayoutDashboard className="size-4" />Organizar
+          </Button>
+          <IrAteAgente nos={nos} aoIr={(id) => { ultimoAgente.current = id; irAte(id) }} />
           <Contexto handoff={canvas.handoff} />
           <Button size="icon" variant="ghost" className="size-8 rounded-lg text-muted-foreground" onClick={alternarFora} title={mostrarFora ? 'Esconder as sessões abertas fora do canvas' : 'Mostrar as sessões abertas fora do canvas (só leitura)'}>
             {mostrarFora ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
@@ -967,6 +1298,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
           <input ref={seletorDeImagem} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden
             onChange={(e) => { const p = ondeColar(); [...(e.target.files ?? [])].forEach((arq, i) => void colocarImagem(arq, { x: p.x + i * 40, y: p.y + i * 40 }).catch(() => {})); e.target.value = '' }} />
         </Panel>
+        {aviso && <Panel position="top-center" className="!mt-3 rounded-lg border border-border bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-lg">{aviso}</Panel>}
         <Panel position="top-right">
           <div className="group relative">
             <span className="grid size-8 cursor-help place-items-center rounded-lg border border-border/60 bg-card/90 text-muted-foreground backdrop-blur hover:text-foreground" aria-label="Legenda das cores">

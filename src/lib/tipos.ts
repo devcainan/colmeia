@@ -160,12 +160,18 @@ export interface Bloco {
   titulo: string
   texto: string
   itens: { id: number; texto: string; estado: EstadoItem; mudou: number; por: 'usuario' | 'agente' }[]
+  /** abas da nota (como no Bloco de Notas do Windows 11); a primeira espelha texto */
+  abas?: AbaNota[]
+  /** fundo escolhido no botão direito; sem ele vale a cor do tipo */
+  cor?: string
   criadoEm: number
 }
 
+export interface AbaNota { id: string; titulo: string; texto: string }
+
 export interface Ligacao { id: string; de: string; para: string }
 
-export type TipoForma = 'frame' | 'retangulo' | 'texto' | 'imagem' | 'desenho'
+export type TipoForma = 'frame' | 'retangulo' | 'texto' | 'imagem' | 'desenho' | 'video'
 
 /** Forma do quadro, como no Figma. O desenho do lápis guarda os pontos em 0..1 dentro da caixa dele. */
 export interface Forma {
@@ -177,6 +183,8 @@ export interface Forma {
   espessura?: number
   pontos?: [number, number][]
   url?: string
+  /** tom do fundo do frame, em % da cor sobre o fundo do canvas (padrão 12; 0 = sem fundo) */
+  opacidade?: number
   criadoEm: number
 }
 

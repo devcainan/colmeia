@@ -19,15 +19,18 @@ Sessões abertas, o que cada uma está fazendo agora, contexto usado, uso do dia
 ### Canvas
 
 - **Terminais de verdade** (Claude, Codex, PowerShell e Git) dentro do canvas: dá para ver a resposta e digitar direto no terminal. Colar, rolar e selecionar texto funcionam em qualquer zoom.
-- **Notas e checklists** ligadas a um terminal arrastando do ponto, como no n8n. *Enviar* manda a nota para o agente; *Executar* manda a checklist e o agente marca cada item.
+- **Notas e checklists** ligadas a um terminal arrastando do ponto, como no n8n. *Enviar* manda a nota para o agente; *Executar* manda a checklist e o agente marca cada item. A nota tem abas como o Bloco de Notas do Windows 11: + cria, duplo clique renomeia, x ou botão do meio fecha. Nota tem fundo azul e checklist verde; o botão direito troca a cor.
+- **Vídeos e imagens dos agentes**: com o `mostrar_video`, o agente põe no canvas o que gerou (por exemplo, 5 versões de um vídeo), ligado a ele. Cada vídeo tem *Escolher esta versão*, e a escolha chega no terminal do agente.
+- **Organizar**: um clique monta um frame por agente, com as notas e checklists à esquerda, o terminal no centro (subagentes, trabalhadores e vídeos embaixo) e o Git e os widgets à direita. O resto vai numa fila embaixo. Ctrl+Z desfaz.
+- **Ir até o agente**: o botão de mira no dock lista os agentes e leva a visão até o frame de cada um. Tab vai ao próximo, Shift+Tab ao anterior e, segurando Tab, as setas andam só entre os que estão trabalhando. Com um terminal selecionado, o Tab fica com ele.
 - **Janela do Git**: branch, à frente/atrás, arquivos alterados, últimos commits e um terminal na pasta.
 - **Líder e trabalhadores**: o líder abre trabalhadores ligados a ele, espera, lê a tela de cada um e junta o resultado.
-- **Subagentes** aparecem embaixo da sessão que os abriu.
+- **Subagentes** aparecem embaixo da sessão ou do terminal que os abriu e seguem junto quando ele é movido.
 - **Migrar**: sessões abertas fora do painel são fechadas e retomadas dentro do canvas (`claude --resume`), continuando do ponto onde estavam.
 - **Reabre sozinho**: ao reiniciar o painel, os terminais voltam e quem estava trabalhando recebe o pedido de continuar.
 - **Passagem de contexto**: um Claude que passa do limite (350 mil tokens por padrão) escreve um resumo e continua num chat novo, no mesmo nó.
 - **Widgets opcionais e ajustáveis** (botão direito › Widgets): validações pendentes, deploy (GitHub Actions), produção no ar (status, tempo de resposta e versão), botões rápidos que digitam no terminal ligado, cronômetro e calculadora (com teclado e as últimas contas).
-- **Formas**: frame, retângulo, texto, imagem e lápis.
+- **Formas**: frame, retângulo, texto, imagem, vídeo (arraste um MP4 para o quadro) e lápis. O frame tem fundo sólido e sem borda, com cor e tom no botão direito, e o nome dele fica do mesmo tamanho na tela em qualquer zoom.
 - **Atalhos**: Ctrl+Z e Ctrl+Shift+Z, Delete apaga o que estiver selecionado (terminal ou cronômetro contando pede confirmação), Espaço alinha os nós selecionados, Ctrl+roda dá zoom só no canvas, botão direito abre o menu do canvas, do nó ou da ligação, e a tesoura no meio corta uma ligação.
 
 ### Uso
@@ -63,7 +66,7 @@ O terminal mostra o endereço com a chave, por exemplo `http://192.168.0.10:5190
 
 ## MCP `painel`
 
-Ferramentas: `criar_nota`, `editar_nota`, `criar_checklist`, `adicionar_itens`, `marcar_item`, `ver_canvas`, `abrir_git`, `abrir_terminal`, `esperar_terminal`, `ler_terminal`, `mandar_terminal` e `fechar_terminal`. O que o agente cria nasce ligado ao nó dele no canvas.
+Ferramentas: `criar_nota` (com abas, se quiser), `editar_nota`, `criar_checklist`, `adicionar_itens`, `marcar_item`, `mostrar_video`, `ver_canvas`, `abrir_git`, `abrir_terminal`, `esperar_terminal`, `ler_terminal`, `mandar_terminal` e `fechar_terminal`. O que o agente cria nasce ligado ao nó dele no canvas.
 
 Claude Code:
 

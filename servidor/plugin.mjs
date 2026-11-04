@@ -43,7 +43,7 @@ function lerBytes(req, limite = 25e6) {
   return new Promise((ok, falha) => {
     const partes = []
     let n = 0
-    req.on('data', (c) => { n += c.length; if (n > limite) { falha(new Error('imagem grande demais (até 25 MB)')); req.destroy() } else partes.push(c) })
+    req.on('data', (c) => { n += c.length; if (n > limite) { falha(new Error(`arquivo grande demais (até ${Math.round(limite / 1e6)} MB)`)); req.destroy() } else partes.push(c) })
     req.on('end', () => ok(Buffer.concat(partes)))
     req.on('error', falha)
   })
@@ -54,17 +54,37 @@ const tudo = () => ({ ...retrato(), canvas: T.lista(), planoClaude: usoDoPlano()
 // Formas do quadro (frame, retângulo, texto, imagem, lápis)
 async function rotasFormas(req, res, u) {
   const f = u.pathname.match(/^\/api\/formas\/(\w+)$/)
+  const escolha = u.pathname.match(/^\/api\/formas\/(\w+)\/escolher$/)
+  if (escolha && req.method === 'POST') {
+    const r = T.escolherForma(escolha[1])
+    return r ? json(res, r) : json(res, { erro: 'não encontrado' }, 404)
+  }
   const img = u.pathname.match(/^\/api\/formas\/imagem\/([\w.]+)$/)
   const ou404 = (x) => (x ? json(res, x) : json(res, { erro: 'não encontrado' }, 404))
   if (img && req.method === 'GET') {
     const a = T.arquivoDaImagem(img[1])
     if (!a) return json(res, { erro: 'imagem não encontrada' }, 404)
+    const tam = fs.statSync(a.arq).size
     res.setHeader('Content-Type', a.tipo)
     res.setHeader('Cache-Control', 'private, max-age=31536000, immutable')
+    res.setHeader('Accept-Ranges', 'bytes')
+    // vídeo: o navegador pede pedaços (Range) para começar logo e para avançar ou voltar
+    const r = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''))
+    if (r && (r[1] || r[2])) {
+      const ini = r[1] ? Number(r[1]) : Math.max(0, tam - Number(r[2]))
+      const fim = r[1] && r[2] ? Math.min(Number(r[2]), tam - 1) : tam - 1
+      if (ini > fim || ini >= tam) { res.statusCode = 416; res.setHeader('Content-Range', `bytes */${tam}`); return res.end() }
+      res.statusCode = 206
+      res.setHeader('Content-Range', `bytes ${ini}-${fim}/${tam}`)
+      res.setHeader('Content-Length', fim - ini + 1)
+      return fs.createReadStream(a.arq, { start: ini, end: fim }).pipe(res)
+    }
+    res.setHeader('Content-Length', tam)
     return fs.createReadStream(a.arq).pipe(res)
   }
   if (u.pathname === '/api/formas/imagem' && req.method === 'POST') {
-    return json(res, { url: T.guardarImagem(await lerBytes(req), String(req.headers['content-type'] || '').split(';')[0]) })
+    const tipo = String(req.headers['content-type'] || '').split(';')[0]
+    return json(res, { url: T.guardarImagem(await lerBytes(req, tipo.startsWith('video/') ? 400e6 : 25e6), tipo) })
   }
   if (u.pathname === '/api/formas' && req.method === 'POST') return json(res, T.criarForma(await lerCorpo(req)))
   if (f && req.method === 'PATCH') return ou404(T.editarForma(f[1], await lerCorpo(req)))
