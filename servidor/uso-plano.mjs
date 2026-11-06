@@ -9,7 +9,7 @@ const CLAUDE = [path.join(os.homedir(), '.local', 'bin', 'claude.exe')].find((f)
 export const DIR_USO = path.join(os.homedir(), '.painel-agentes', 'uso')
 // o Claude grava a conversa em projects/<pasta com tudo que não é letra/número/hífen trocado por hífen>
 export const PROJETO_USO = DIR_USO.replace(/[^a-zA-Z0-9-]/g, '-')
-const HERDADAS = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_(CHILD_SESSION|ENTRYPOINT|MESSAGING_SOCKET|MESSAGING_TOKEN|SESSION_ATTENDED|SESSION_ID|SSE_PORT)|PAINEL_TERMINAL)$/
+const HERDADAS = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_(CHILD_SESSION|ENTRYPOINT|MESSAGING_SOCKET|MESSAGING_TOKEN|SESSION_ATTENDED|SESSION_ID|SSE_PORT)|PAINEL_TERMINAL|COLMEIA_DONO)$/
 const MESES = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 }
 
 let estado = null

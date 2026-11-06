@@ -1,6 +1,6 @@
 import { createContext, memo, useContext, useEffect, useRef, useState } from 'react'
 import { Handle, NodeResizer, Position, useStore, type Node, type NodeProps } from '@xyflow/react'
-import { ArrowDown, ArrowUp, Check, Circle, CircleCheck, CircleDot, ExternalLink, Film, ListChecks, Maximize2, Network, Plus, RotateCcw, Send, StickyNote, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, Circle, CircleCheck, CircleDot, ExternalLink, Film, Globe, ListChecks, Maximize2, MousePointerClick, Network, Plus, RotateCcw, RotateCw, Send, StickyNote, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { api, enviar } from '@/lib/dados'
@@ -53,7 +53,8 @@ function BotaoMigrar({ s }: { s: Sessao }) {
 
 export type DadosTerminal = { t: Terminal; sessao: Sessao | null; git: EstadoGit | null; ligados: number }
 export type DadosSessao = { s: Sessao }
-export type DadosSub = { sub: SubResumo; agente: 'claude' | 'codex' }
+/** sessao: é uma sessão de fora presa ao agente (aberta por ele), não um subagente do Claude */
+export type DadosSub = { sub: SubResumo; agente: 'claude' | 'codex'; sessao?: boolean }
 export type DadosBloco = { b: Bloco; ligados: number }
 
 const JANELA_CLAUDE = 1_000_000
@@ -264,18 +265,21 @@ export const NoSessao = memo(function NoSessao({ id, data }: NodeProps<Node<Dado
 })
 
 export const NoSubagente = memo(function NoSubagente({ data }: NodeProps<Node<DadosSub>>) {
-  const { sub } = data
+  const { sub, sessao } = data
   const st = STATUS[sub.status]
   return (
     <div className={cn('grid h-full w-full content-center gap-0.5 rounded-lg border bg-card px-2.5 py-1.5 shadow-sm', sub.status === 'trabalhando' && 'borda-viva')}
-      style={{ borderColor: mistura(COR.subagente, 50) }}>
+      style={{ borderColor: mistura(COR.subagente, 50) }} title={sessao ? 'Sessão aberta por este agente (fora do canvas)' : undefined}>
       <Cima cor={COR.subagente} />
       <div className="flex items-center gap-1.5">
         <Network className="size-3 shrink-0" style={{ color: COR.subagente }} />
         <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{sub.titulo || sub.nome || 'subagente'}</span>
         <Ponto cor={st.cor} vivo={sub.status === 'trabalhando'} />
       </div>
-      <p className="truncate text-[10px] text-muted-foreground">{sub.status === 'trabalhando' ? sub.fazendo || 'trabalhando' : 'terminou'}</p>
+      {sub.esperando
+        // o usuário não responde: o painel avisou o agente dono, que traz a sessão para o canvas e responde
+        ? <p className="truncate text-[10px] text-amber-500">esperando {/permiss/i.test(sub.esperando) ? 'permissão' : 'resposta'} · o agente responde</p>
+        : <p className="truncate text-[10px] text-muted-foreground">{sub.status === 'trabalhando' ? sub.fazendo || 'trabalhando' : sessao ? 'sessão parada' : 'terminou'}</p>}
     </div>
   )
 })
@@ -576,6 +580,66 @@ export const NoVideo = memo(function NoVideo({ id, data, selected }: NodeProps<N
   )
 })
 
+const COR_PAGINA = 'var(--ev-plano)'
+
+// Um arraste do canvas (nó, fundo, alça de redimensionar) que passa por cima de uma página embutida: o iframe engolia
+// o soltar do botão e o nó ficava grudado no cursor. Com o botão apertado fora das páginas, elas não pegam o mouse.
+let vigiandoArraste = false
+function vigiarArraste() {
+  if (vigiandoArraste) return
+  vigiandoArraste = true
+  const raiz = document.documentElement
+  const soltar = () => raiz.classList.remove('arrastando-canvas')
+  window.addEventListener('pointerdown', () => raiz.classList.add('arrastando-canvas'), true)
+  window.addEventListener('pointerup', soltar, true)
+  window.addEventListener('pointercancel', soltar, true)
+  window.addEventListener('blur', soltar)
+}
+const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])$/
+
+/**
+ * Página que um agente abriu no canvas (MCP abrir_pagina) para o usuário testar: um navegador embutido.
+ * Sem seleção, uma película por cima deixa arrastar e dar zoom no canvas; um clique seleciona e libera a página
+ * (o iframe engole o mouse, então o arraste do canvas não pode passar por dentro dele).
+ */
+export const NoPagina = memo(function NoPagina({ id, data, selected }: NodeProps<Node<DadosForma>>) {
+  const { f } = data
+  const [versao, setVersao] = useState(0)
+  const [endereco, setEndereco] = useState(f.url || '')
+  useEffect(() => setEndereco(f.url || ''), [f.url])
+  useEffect(vigiarArraste, [])
+  const ir = () => {
+    const v = endereco.trim()
+    if (!v || v === f.url) return void setVersao((n) => n + 1)
+    editarForma(f, { url: /^https?:\/\//i.test(v) ? v : `http://${v}` })
+  }
+  let local = false
+  try { local = !!f.url && LOCAL.test(new URL(f.url).hostname) && !LOCAL.test(location.hostname) } catch { /* endereço velho */ }
+  return (
+    <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border-2 bg-card shadow-md" style={{ borderColor: mistura(COR_PAGINA, selected ? 90 : 50) }}>
+      <Redimensionar id={id} visivel={selected} minW={320} minH={240} />
+      <header className="alca flex cursor-grab items-center gap-2 px-3 py-1.5" style={{ background: mistura(COR_PAGINA, 14) }}>
+        <Globe className="size-3.5 shrink-0" style={{ color: COR_PAGINA }} />
+        <span className="max-w-[40%] shrink-0"><Titulo no={id} valor={f.texto || 'Página'} className="text-xs font-medium" aoSalvar={(v) => editarForma(f, { texto: v || 'Página' })} /></span>
+        <input value={endereco} onChange={(e) => setEndereco(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') ir(); if (e.key === 'Escape') setEndereco(f.url || '') }}
+          spellCheck={false} title="Endereço: digite e aperte Enter" className="nodrag min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 py-0.5 font-mono text-[11px] outline-none focus:ring-1 focus:ring-ring" />
+        <button type="button" onClick={() => setVersao((n) => n + 1)} className="nodrag text-muted-foreground hover:text-foreground" title="Recarregar a página"><RotateCw className="size-3.5" /></button>
+        {f.url && <a href={f.url} target="_blank" rel="noreferrer" className="nodrag text-muted-foreground hover:text-foreground" title="Abrir em outra aba"><ExternalLink className="size-3.5" /></a>}
+      </header>
+      <div className="relative min-h-0 flex-1 bg-white">
+        {f.url && <iframe key={`${f.url}#${versao}`} src={f.url} title={f.texto || 'Página'} className="nodrag nowheel nopan h-full w-full border-0" allow="clipboard-read; clipboard-write; fullscreen" />}
+        {!selected && (
+          <div className="absolute inset-0 flex items-end justify-center bg-transparent pb-3 opacity-0 transition-opacity hover:opacity-100">
+            <span className="flex items-center gap-1.5 rounded-full bg-foreground/80 px-3 py-1 text-[11px] text-background shadow"><MousePointerClick className="size-3.5" />Clique para usar a página</span>
+          </div>
+        )}
+      </div>
+      {local && <div className="border-t border-border/60 px-3 py-1 text-[10px] text-muted-foreground">Endereço local: só abre no navegador deste computador.</div>}
+      <Lados cor={COR_PAGINA} />
+    </div>
+  )
+})
+
 /** Traço do lápis: pontos em 0..1, então o desenho estica junto com a caixa. */
 export function caminhoDoTraco(pontos: [number, number][], escala = 1000) {
   if (!pontos.length) return ''
@@ -606,5 +670,5 @@ export const NoDesenho = memo(function NoDesenho({ id, data, selected }: NodePro
 
 export const tiposDeNo = {
   terminal: NoTerminal, sessao: NoSessao, subagente: NoSubagente, nota: NoNota, checklist: NoChecklist,
-  frame: NoFrame, retangulo: NoRetangulo, texto: NoTexto, imagem: NoImagem, desenho: NoDesenho, video: NoVideo,
+  frame: NoFrame, retangulo: NoRetangulo, texto: NoTexto, imagem: NoImagem, desenho: NoDesenho, video: NoVideo, pagina: NoPagina,
 }

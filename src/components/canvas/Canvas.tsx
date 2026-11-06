@@ -6,7 +6,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import {
   CircleStop, Crown, Eye, EyeOff, Frame as IconeFrame, Gauge, GitBranch, ImagePlus, Info, LayoutDashboard, LayoutGrid, ListChecks, Maximize, Maximize2, MousePointer2, Pencil,
-  LocateFixed, Play, Plus, RotateCcw, Send, Square, StickyNote, Terminal as IconeTerminal, Trash2, Type, Unlink, type LucideIcon,
+  Link2, LocateFixed, Play, Plus, RotateCcw, Send, Square, StickyNote, Terminal as IconeTerminal, Trash2, Type, Unlink, type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -39,7 +39,7 @@ const TAM: Record<string, { w: number; h: number }> = {
   terminal: { w: 680, h: 500 }, git: { w: 700, h: 600 }, sessao: { w: 300, h: 150 },
   subagente: { w: 230, h: 54 }, nota: { w: 280, h: 220 }, checklist: { w: 300, h: 300 },
   frame: { w: 480, h: 320 }, retangulo: { w: 200, h: 120 }, texto: { w: 240, h: 40 }, imagem: { w: 320, h: 240 }, desenho: { w: 100, h: 100 },
-  video: { w: 360, h: 400 },
+  video: { w: 360, h: 400 }, pagina: { w: 1024, h: 720 },
 }
 
 // ---------- ferramentas do quadro (como no Figma) ----------
@@ -431,7 +431,12 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
 
   const porSessao = useMemo(() => new Map(sessoes.map((s) => [s.id, s])), [sessoes])
   const terminalDaSessao = useMemo(() => new Map(canvas.terminais.filter((t) => t.sessao).map((t) => [t.sessao!, t])), [canvas.terminais])
-  const fora = useMemo(() => (mostrarFora ? visiveis.filter((s) => s.papel === 'principal' && s.status !== 'fechada' && !terminalDaSessao.has(s.id)) : []), [visiveis, terminalDaSessao, mostrarFora])
+  // sessão de fora aberta por um agente do canvas (marca do MCP ou presa à mão): fica embaixo dele, não na fila de fora
+  const donoDaSessao = useMemo(() => {
+    const vivos = new Set(canvas.terminais.map((t) => t.id))
+    return new Map(Object.entries(canvas.donos ?? {}).filter((e): e is [string, string] => !!e[1] && vivos.has(e[1])))
+  }, [canvas.donos, canvas.terminais])
+  const fora = useMemo(() => (mostrarFora ? visiveis.filter((s) => s.papel === 'principal' && s.status !== 'fechada' && !terminalDaSessao.has(s.id) && !donoDaSessao.has(s.id)) : []), [visiveis, terminalDaSessao, donoDaSessao, mostrarFora])
   const pastas = useMemo(() => [...new Set([...canvas.terminais.map((t) => t.cwd), ...sessoes.map((s) => s.pasta).filter((p): p is string => !!p)])], [canvas.terminais, sessoes])
   const pastaPadrao = lerLocal('canvas-pasta', pastas[0] || '')
 
@@ -439,8 +444,10 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
   const noDaSessao = useCallback((id: string) => {
     const t = terminalDaSessao.get(id)
     if (t) return `t:${t.id}`
+    const dono = donoDaSessao.get(id)
+    if (dono) return `t:${dono}`
     return fora.some((s) => s.id === id) ? `s:${id}` : null
-  }, [terminalDaSessao, fora])
+  }, [terminalDaSessao, donoDaSessao, fora])
 
   const ligadosA = useMemo(() => {
     const m = new Map<string, number>()
@@ -468,8 +475,15 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
         if (sub.status === 'trabalhando' || (sub.ultima && agora - sub.ultima < SUB_RECENTE)) out.push({ id: `sub:${sub.id}`, pai, d: { sub, agente: s.agente } })
       }
     }
+    // sessões de fora que um agente abriu: em fila embaixo dele, como os subagentes
+    for (const s of sessoes) {
+      const dono = donoDaSessao.get(s.id)
+      if (!dono || s.papel !== 'principal' || s.status === 'fechada' || terminalDaSessao.has(s.id)) continue
+      const sub = { id: s.id, titulo: s.titulo, nome: s.nome, status: s.status, total: s.total, custo: s.custo, modelo: s.modelo, inicio: s.inicio, ultima: s.ultima, fazendo: s.fazendo?.texto ?? null, esperando: s.esperando ?? null }
+      out.push({ id: `sub:${s.id}`, pai: `t:${dono}`, d: { sub, agente: s.agente, sessao: true } })
+    }
     return out
-  }, [sessoes, noDaSessao])
+  }, [sessoes, noDaSessao, donoDaSessao, terminalDaSessao])
 
   useEffect(() => {
     setNos((antes) => {
@@ -883,6 +897,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       ]
     } else if (n.type === 'sessao') {
       const s = (n.data as DadosSessao).s
+      const possiveisDonos = canvas.terminais.filter((x) => x.tipo === 'claude' || x.tipo === 'codex')
       titulo = s.nome || s.titulo || s.id.slice(0, 8)
       itens = [
         { rotulo: 'Ver detalhes', Icone: Maximize2, acao: () => aoAbrir(s.id) },
@@ -891,6 +906,10 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
         { rotulo: 'Janela do Git desta pasta', Icone: GitBranch, cor: COR.git, acao: () => void criarTerminal({ tipo: 'git', cwd: s.pasta || pastaPadrao, titulo: 'Git' }, perto).catch(() => {}) },
         { rotulo: 'Nota ligada', Icone: StickyNote, cor: COR.nota, acao: () => void criarBloco('nota', undefined, n.id).catch(() => {}) },
         { rotulo: 'Checklist ligada', Icone: ListChecks, cor: COR.checklist, acao: () => void criarBloco('checklist', undefined, n.id).catch(() => {}) },
+        ...(possiveisDonos.length ? [{ rotulo: 'Prender ao agente que a abriu', Icone: Link2, sub: possiveisDonos.map((t) => ({
+          rotulo: nomeDoTerminal(t, t.sessao ? porSessao.get(t.sessao) || null : null), Icone: t.tipo === 'codex' ? LogoCodex : LogoClaude,
+          acao: () => void enviar('PUT', `/api/donos/${s.id}`, { terminal: t.id }).catch(() => {}),
+        })) } as ItemMenu] : []),
         'separador',
         { rotulo: 'Esconder sessões de fora', Icone: EyeOff, acao: alternarFora },
       ]
@@ -914,8 +933,8 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       ]
     } else if (n.id.startsWith('f:')) {
       const f = (n.data as DadosForma).f
-      const NOME: Record<TipoForma, string> = { frame: 'Frame', retangulo: 'Retângulo', texto: 'Texto', imagem: 'Imagem', desenho: 'Desenho', video: 'Vídeo' }
-      titulo = f.tipo === 'frame' || f.tipo === 'video' ? f.texto || NOME[f.tipo] : NOME[f.tipo]
+      const NOME: Record<TipoForma, string> = { frame: 'Frame', retangulo: 'Retângulo', texto: 'Texto', imagem: 'Imagem', desenho: 'Desenho', video: 'Vídeo', pagina: 'Página' }
+      titulo = f.tipo === 'frame' || f.tipo === 'video' || f.tipo === 'pagina' ? f.texto || NOME[f.tipo] : NOME[f.tipo]
       const mudar = (dados: Partial<Forma>) => void enviar('PATCH', `/api/formas/${f.id}`, dados).catch(() => {})
       itens = [
         ...(f.tipo === 'frame' ? [
@@ -928,7 +947,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
           ...TAMANHOS_TEXTO.map(([r, t]) => ({ rotulo: `${r}${(f.tamanho || 18) === t ? ' ✓' : ''}`, Icone: Type, acao: () => mudar({ tamanho: t }) }) as ItemMenu),
         ] : []),
         ...(f.tipo === 'desenho' ? [1, 3, 6, 12].map((e) => ({ rotulo: `Traço ${e}${(f.espessura || 3) === e ? ' ✓' : ''}`, Icone: Pencil, acao: () => mudar({ espessura: e }) }) as ItemMenu) : []),
-        ...(f.tipo !== 'imagem' && f.tipo !== 'video' && f.tipo !== 'frame' ? [{ rotulo: 'Usar a cor escolhida na barra', Icone: Square, cor, acao: () => mudar({ cor }) } as ItemMenu] : []),
+        ...(f.tipo !== 'imagem' && f.tipo !== 'video' && f.tipo !== 'pagina' && f.tipo !== 'frame' ? [{ rotulo: 'Usar a cor escolhida na barra', Icone: Square, cor, acao: () => mudar({ cor }) } as ItemMenu] : []),
         { rotulo: 'Apagar', Icone: Trash2, perigo: true, acao: () => void enviar('DELETE', `/api/formas/${f.id}`).then(() => registrar(passoFormaApagada(f, { x: n.position.x, y: n.position.y, w: n.width as number, h: n.height as number }))).catch(() => {}) },
         'separador',
         ...itensDoFundo(screenToFlowPosition({ x: e.clientX, y: e.clientY })),
@@ -949,7 +968,12 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
     } else if (n.type === 'subagente') {
       const d = n.data as DadosSub
       titulo = d.sub.titulo || d.sub.nome || 'subagente'
-      itens = [{ rotulo: 'Ver detalhes do subagente', Icone: Maximize2, acao: () => aoAbrir(d.sub.id) }]
+      itens = d.sessao
+        ? [
+            { rotulo: 'Ver detalhes da sessão', Icone: Maximize2, acao: () => aoAbrir(d.sub.id) },
+            { rotulo: 'Soltar do agente (volta para as sessões de fora)', Icone: Unlink, acao: () => void enviar('PUT', `/api/donos/${d.sub.id}`, { terminal: null }).catch(() => {}) },
+          ]
+        : [{ rotulo: 'Ver detalhes do subagente', Icone: Maximize2, acao: () => aoAbrir(d.sub.id) }]
     }
     setMenu({ x: e.clientX, y: e.clientY, titulo, itens })
   }
@@ -1032,8 +1056,8 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
   }, [])
 
   // ---------- Organizar: um frame por frente (cada agente e o que é dele), lado a lado ----------
-  // dentro do frame: notas e checklists à esquerda, o terminal no centro com subagentes, trabalhadores e vídeos
-  // embaixo, Git e widgets à direita. O resto vai numa fila embaixo, e as sessões de fora numa fila no fim.
+  // dentro do frame: notas e checklists à esquerda, o terminal no centro com subagentes, trabalhadores, vídeos e
+  // páginas embaixo, Git e widgets à direita. O resto vai numa fila embaixo, e as sessões de fora numa fila no fim.
   const organizar = async () => {
     const lista = nosRef.current
     const porId = new Map(lista.map((n) => [n.id, n]))
@@ -1069,6 +1093,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       const direita = [...desc.filter((t) => t.tipo === 'git').map((t) => `t:${t.id}`), ...ligados.filter((x) => x.startsWith('w:'))]
       const trabs = desc.filter((t) => t.tipo !== 'git').map((t) => `t:${t.id}`)
       const midias = ligados.filter((x) => porId.get(x)!.type === 'video' || porId.get(x)!.type === 'imagem')
+      const paginas = ligados.filter((x) => porId.get(x)!.type === 'pagina')
       const seusSubs = subs.filter((s) => membros.includes(s.pai) && porId.has(s.id)).map((s) => s.id)
 
       const fy = y0
@@ -1101,6 +1126,8 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
         cy = y1 + Math.ceil(midias.length / porLinha) * (mh + 24) - 24
         largura = Math.max(largura, Math.min(midias.length, porLinha) * (mw + 24) - 24)
       }
+      // páginas embutidas (abrir_pagina) são grandes: uma fileira só delas, embaixo dos vídeos
+      if (paginas.length) cy += 60 + linha(paginas, cy + 60, 40)
       const rx = cx + largura + VAO * 2
       let ry = fy + PAD
       for (const x of direita) { por(x, rx, ry); ry += tam(x).h + VAO }
@@ -1287,7 +1314,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
           <Button size="icon" variant="ghost" className="size-8 rounded-lg" title="Checklist (com um terminal selecionado, já nasce ligada a ele)" onClick={() => void criarBloco('checklist', undefined, terminalSelecionado()).catch(() => {})}><ListChecks className="size-4" style={{ color: COR.checklist }} /></Button>
           <Button size="icon" variant="ghost" className="size-8 rounded-lg" title="Janela do Git" onClick={() => void criarTerminal({ tipo: 'git', cwd: pastaPadrao, titulo: 'Git' }).catch(() => {})}><GitBranch className="size-4" style={{ color: COR.git }} /></Button>
           <span className="mx-1 h-5 w-px bg-border" />
-          <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg px-2.5" title="Organizar: um frame por agente, com as notas, checklists, Git, widgets e vídeos dele; o resto numa fila embaixo (Ctrl+Z desfaz)" onClick={() => void organizar()}>
+          <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg px-2.5" title="Organizar: um frame por agente, com as notas, checklists, Git, widgets, vídeos e páginas dele; o resto numa fila embaixo (Ctrl+Z desfaz)" onClick={() => void organizar()}>
             <LayoutDashboard className="size-4" />Organizar
           </Button>
           <IrAteAgente nos={nos} aoIr={(id) => { ultimoAgente.current = id; irAte(id) }} />

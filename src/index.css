@@ -299,3 +299,6 @@
     transform: translate(-50%, -50%) scale(1.5);
 }
 .react-flow__handle { transition: transform 0.12s ease, box-shadow 0.12s ease; }
+
+/* arraste do canvas em andamento: a página embutida não pode engolir o soltar do botão (nos.tsx, vigiarArraste) */
+.arrastando-canvas iframe { pointer-events: none; }

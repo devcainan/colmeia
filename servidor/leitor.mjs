@@ -291,6 +291,7 @@ function linhaClaude(s, o) {
     case 'custom-title': if (o.customTitle) s.titulo = o.customTitle; break
     case 'summary': if (o.summary && !s.titulo) s.titulo = o.summary; break
     case 'last-prompt': if (o.lastPrompt && !/^\s*</.test(o.lastPrompt)) s.ultimoPedido = curto(o.lastPrompt, 220); break
+    case 'continued-in': if (o.continuedInSessionId) s.continuouEm = o.continuedInSessionId; break
     case 'system':
       if (o.subtype === 'compact_boundary') evento(s, t, 'aviso', 'contexto compactado')
       else if (o.level === 'error' || o.subtype === 'api_error') evento(s, t, 'erro', o.content || 'erro da API')
@@ -679,6 +680,7 @@ function resumoSessao(s, filhos) {
     checklist: [...s.tarefas.values()].map(({ id, titulo, status, mudou }) => ({ id, titulo, status, mudou })),
     nArquivos: Object.keys(s.arquivos).length, faisca: faisca(s),
     pid: aberta?.pid || null, versao: aberta?.version || null,
+    esperando: aberta?.status === 'waiting' ? aberta.waitingFor || 'resposta' : null,
   }
 }
 
@@ -794,8 +796,10 @@ function avisar() { for (const f of ouvintes) f(versao) }
 export function sessaoPorPid(pid) {
   for (const a of abertasClaude.values()) {
     if (a.pid !== pid) continue
-    const s = sessoes.get(a.sessionId)
-    return { id: a.sessionId, status: s ? statusDe(s) : (a.status === 'busy' ? 'trabalhando' : 'parada'), contexto: s?.contexto || 0 }
+    // chat mandado para segundo plano: o Claude continua numa sessão nova (parkedJobId) que este terminal passa a mostrar
+    const b = (a.parkedJobId && [...abertasClaude.values()].find((x) => x.sessionId.startsWith(a.parkedJobId))) || a
+    const s = sessoes.get(b.sessionId)
+    return { id: b.sessionId, status: s ? statusDe(s) : (b.status === 'busy' ? 'trabalhando' : 'parada'), contexto: s?.contexto || 0 }
   }
   return null
 }
@@ -805,7 +809,16 @@ export function sessaoAberta(id) {
   const a = abertasClaude.get(id)
   if (!a) return null
   const s = sessoes.get(id)
-  return { pid: a.pid, cwd: a.cwd || s?.pasta || null, nome: a.name || s?.titulo || null, status: s ? statusDe(s) : (a.status === 'busy' ? 'trabalhando' : 'parada') }
+  return { pid: a.pid, cwd: a.cwd || s?.pasta || null, nome: a.name || s?.titulo || null, status: s ? statusDe(s) : (a.status === 'busy' ? 'trabalhando' : 'parada'), bg: a.kind === 'bg',
+    // parada num pedido de permissão ou pergunta: só anda quando alguém responde
+    esperando: a.status === 'waiting', motivo: a.waitingFor || null }
+}
+
+/** Conversa mandada para segundo plano continua numa sessão nova ("continued-in"): a última da cadeia, se ainda está aberta. */
+export function continuacao(id) {
+  let atual = id
+  for (let i = 0; i < 5 && sessoes.get(atual)?.continuouEm; i++) atual = sessoes.get(atual).continuouEm
+  return atual !== id && abertasClaude.has(atual) ? atual : id
 }
 
 export function aoMudar(f) { ouvintes.add(f); return () => ouvintes.delete(f) }

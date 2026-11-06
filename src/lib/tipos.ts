@@ -26,6 +26,8 @@ export interface SubResumo {
   inicio?: number | null
   ultima?: number | null
   fazendo?: string | null
+  /** sessão presa parada num pedido de permissão ou pergunta (quem responde é o agente dono) */
+  esperando?: string | null
 }
 
 export interface Sessao {
@@ -62,6 +64,8 @@ export interface Sessao {
   faisca?: number[]
   pid: number | null
   versao: string | null
+  /** parada num pedido de permissão ou pergunta: o motivo que o Claude informa */
+  esperando?: string | null
 }
 
 export interface ItemChecklist {
@@ -115,6 +119,8 @@ export interface Retrato {
   ferramentas: { nome: string; qtd: number }[]
   canvas?: EstadoCanvas
   planoClaude?: PlanoClaude | null
+  /** O GitHub tem commits que esta Colmeia não tem. */
+  atualizacao?: { atras: number; titulo: string } | null
 }
 
 /** Os mesmos limites do /usage do Claude Code. */
@@ -171,7 +177,7 @@ export interface AbaNota { id: string; titulo: string; texto: string }
 
 export interface Ligacao { id: string; de: string; para: string }
 
-export type TipoForma = 'frame' | 'retangulo' | 'texto' | 'imagem' | 'desenho' | 'video'
+export type TipoForma = 'frame' | 'retangulo' | 'texto' | 'imagem' | 'desenho' | 'video' | 'pagina'
 
 /** Forma do quadro, como no Figma. O desenho do lápis guarda os pontos em 0..1 dentro da caixa dele. */
 export interface Forma {
@@ -210,6 +216,8 @@ export interface EstadoCanvas {
   git: Record<string, EstadoGit>
   widgets?: Widget[]
   widgetsDados?: Record<string, DadosWidget>
+  /** sessão de fora -> terminal do agente que a abriu (null: solta à mão) */
+  donos?: Record<string, string | null>
 }
 
 export type TipoWidget = 'validacoes' | 'deploy' | 'producao' | 'botoes' | 'cronometro' | 'calculadora'

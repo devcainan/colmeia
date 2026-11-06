@@ -3,10 +3,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import os from 'node:os'
-import { iniciar, retrato, historico, detalhe, aoMudar, sessaoPorPid, sessaoAberta } from './leitor.mjs'
+import { iniciar, retrato, historico, detalhe, aoMudar, sessaoPorPid, sessaoAberta, continuacao } from './leitor.mjs'
 import * as T from './terminais.mjs'
 import * as W from './widgets.mjs'
 import { iniciarUsoDoPlano, usoDoPlano } from './uso-plano.mjs'
+import { iniciarAtualizacao, atualizacao, atualizar } from './atualizar.mjs'
 
 const ARQ_CHAVE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', '.chave')
 
@@ -49,7 +50,7 @@ function lerBytes(req, limite = 25e6) {
   })
 }
 
-const tudo = () => ({ ...retrato(), canvas: T.lista(), planoClaude: usoDoPlano() })
+const tudo = () => ({ ...retrato(), canvas: T.lista(), planoClaude: usoDoPlano(), atualizacao: atualizacao() })
 
 // Formas do quadro (frame, retângulo, texto, imagem, lápis)
 async function rotasFormas(req, res, u) {
@@ -132,7 +133,10 @@ async function rotasTerminais(req, res, u) {
     if (u.pathname === '/api/terminais' && req.method === 'GET') return json(res, T.lista())
     if (u.pathname === '/api/terminais' && req.method === 'POST') return json(res, T.criar(await lerCorpo(req)))
     if (u.pathname === '/api/lider' && req.method === 'POST') return json(res, T.criarLider(await lerCorpo(req)))
-    if (u.pathname === '/api/migrar' && req.method === 'POST') return json(res, await T.migrar((await lerCorpo(req)).sessao))
+    if (u.pathname === '/api/atualizar' && req.method === 'POST') return json(res, await atualizar())
+    if (u.pathname === '/api/migrar' && req.method === 'POST') { const c = await lerCorpo(req); return json(res, await T.migrar(c.sessao, c.pai ? String(c.pai) : null)) }
+    const dono = u.pathname.match(/^\/api\/donos\/([\w-]+)$/)
+    if (dono && req.method === 'PUT') { const c = await lerCorpo(req); return json(res, T.marcarDono(dono[1], c.terminal ?? null)) }
     if (u.pathname === '/api/canvas' && req.method === 'PUT') { T.salvarCanvas(await lerCorpo(req)); return json(res, { ok: true }) }
     if (m && !m[2] && req.method === 'DELETE') return T.fechar(m[1]) ? json(res, { ok: true }) : json(res, { erro: 'terminal não encontrado' }, 404)
     if (m && !m[2] && req.method === 'PATCH') {
@@ -167,8 +171,10 @@ function rotas(chave) {
     if (!req.url?.startsWith('/api/')) return next()
     const u = new URL(req.url, 'http://painel')
     const comChave = u.searchParams.get('chave') === chave
-    if (/^\/api\/(terminais|lider|canvas|blocos|ligacoes|formas|migrar|widgets)/.test(u.pathname)) {
-      return comChave ? rotasTerminais(req, res, u) : json(res, { erro: 'chave inválida' }, 401)
+    if (/^\/api\/(terminais|lider|canvas|blocos|ligacoes|formas|migrar|widgets|donos|atualizar)/.test(u.pathname)) {
+      if (!comChave) return json(res, { erro: 'chave inválida' }, 401)
+      // criar, apagar, ligar e desfazer aparecem na hora nos navegadores (antes esperavam o lote de 0,7 s)
+      return rotasTerminais(req, res, u).finally(() => { if (req.method !== 'GET') T.avisarJa() })
     }
     if (!ehLocal(req) && !comChave) return json(res, { erro: 'chave inválida' }, 401)
 
@@ -186,10 +192,11 @@ function rotas(chave) {
         res.write(`data: ${JSON.stringify(tudo())}\n\n`)
       }
       enviar()
-      // junta mudanças seguidas num envio só
+      // junta mudanças seguidas num envio só; o que a tela muda no canvas (avisarJa) vai na hora
       const agendar = () => { if (!pendente) pendente = setTimeout(enviar, 500) }
+      const ja = () => { if (pendente) clearTimeout(pendente); enviar() }
       const parar = aoMudar(agendar)
-      const pararT = T.aoMudarTerminais(agendar)
+      const pararT = T.aoMudarTerminais((agora) => (agora === true ? ja() : agendar()))
       const pulso = setInterval(() => res.write(': pulso\n\n'), 20000)
       req.on('close', () => { parar(); pararT(); clearInterval(pulso); if (pendente) clearTimeout(pendente) })
       return
@@ -208,8 +215,9 @@ export function painelAgentes() {
   const ligar = (server) => {
     chave = chaveDoPainel()
     iniciar()
-    T.iniciarTerminais({ porPid: sessaoPorPid, aberta: sessaoAberta })
+    T.iniciarTerminais({ porPid: sessaoPorPid, aberta: sessaoAberta, continua: continuacao })
     iniciarUsoDoPlano()
+    iniciarAtualizacao(T.avisarJa)
     if (server.httpServer) T.ligarWebSocket(server.httpServer, chave)
     server.middlewares.use(rotas(chave))
     server.httpServer?.once('listening', () => {

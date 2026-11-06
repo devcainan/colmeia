@@ -27,12 +27,15 @@ const HERDADAS = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_(CHILD_SESSION|ENTRYPOINT|
 // Claude parado num pedido de permissão: precisa de alguém no terminal
 const PEDINDO_PERMISSAO = /Do you want to (proceed|make this edit|create|allow)|Would you like to proceed|Allow .{1,40} to run/i
 
-const PADRAO = { posicoes: {}, terminais: [], handoff: { ligado: true, limite: 350000 }, blocos: [], ligacoes: [], formas: [] }
+const PADRAO = { posicoes: {}, terminais: [], handoff: { ligado: true, limite: 350000 }, blocos: [], ligacoes: [], formas: [], donos: {} }
+// sessão de fora aberta por um agente do canvas: o MCP dela grava aqui <pid do claude>.json com o terminal dono
+const DIR_DONOS = path.join(os.homedir(), '.painel-agentes', 'donos')
 const terminais = new Map()
 const ouvintes = new Set()
 let canvas = lerCanvas()
 let sessaoPorPid = () => null
 let sessaoAberta = () => null
+let continuacao = (id) => id
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function lerCanvas() {
@@ -53,6 +56,11 @@ function avisar() {
   if (avisoPendente) return
   avisoPendente = setTimeout(() => { avisoPendente = null; for (const f of ouvintes) f() }, 200)
 }
+/** Mudança feita pela tela (criar, apagar, ligar, desfazer): vai aos navegadores na hora, sem esperar o lote. */
+export function avisarJa() {
+  if (avisoPendente) { clearTimeout(avisoPendente); avisoPendente = null }
+  for (const f of ouvintes) f(true)
+}
 export function aoMudarTerminais(f) { ouvintes.add(f); return () => ouvintes.delete(f) }
 
 function meta(t) {
@@ -64,7 +72,7 @@ function meta(t) {
 }
 
 export function lista() {
-  return { terminais: [...terminais.values()].map(meta), posicoes: canvas.posicoes, handoff: canvas.handoff, blocos: canvas.blocos, ligacoes: canvas.ligacoes, formas: canvas.formas, git: estadoGit, ...listaWidgets() }
+  return { terminais: [...terminais.values()].map(meta), posicoes: canvas.posicoes, handoff: canvas.handoff, blocos: canvas.blocos, ligacoes: canvas.ligacoes, formas: canvas.formas, donos: canvas.donos || {}, git: estadoGit, ...listaWidgets() }
 }
 
 function textoDaTela(t, linhas = 40) {
@@ -89,7 +97,9 @@ function enviarAosClientes(t, d) {
 function abrirProcesso(t, { prompt, retomar } = {}) {
   const env = {}
   for (const [k, v] of Object.entries(process.env)) if (!HERDADAS.test(k)) env[k] = v
-  Object.assign(env, { TERM: 'xterm-256color', COLORTERM: 'truecolor', PAINEL_TERMINAL: t.id })
+  // COLMEIA_DONO passa para tudo que roda embaixo do terminal (até quem tira o PAINEL_TERMINAL do ambiente):
+  // a sessão do Claude aberta por este agente se apresenta como dele (mcp.mjs) e fica presa embaixo dele no canvas
+  Object.assign(env, { TERM: 'xterm-256color', COLORTERM: 'truecolor', PAINEL_TERMINAL: t.id, COLMEIA_DONO: t.id })
   const texto = prompt ? String(prompt).replace(/\r\n/g, '\n') : null
   let arquivo, args
   if (t.tipo === 'claude') {
@@ -97,9 +107,18 @@ function abrirProcesso(t, { prompt, retomar } = {}) {
     args = []
     if (t.modo === 'acceptEdits') args.push('--permission-mode', 'acceptEdits')
     // o equipe.mjs só fala com o painel: abrir trabalhadores (líder) e marcar checklists do canvas
-    args.push('--allowedTools', `Bash(node ${EQUIPE}:*)`)
-    if (retomar) args.push('--resume', retomar)
-    if (texto) args.push(texto)
+    // com '=' numa peça só: separado, o --allowedTools aceita vários valores e engolia o prompt que vem depois
+    // (o chat novo da passagem de contexto, o líder e os trabalhadores abriam sem o pedido)
+    args.push(`--allowedTools=Bash(node ${EQUIPE}:*)`)
+    // conversa que está rodando em segundo plano: abre a mesma com attach; --resume abriria outra cópia trabalhando junto
+    const atual = retomar ? continuacao(retomar) : null
+    if (atual && sessaoAberta(atual)?.bg) {
+      args = ['attach', atual.slice(0, 8)] // o attach só aceita o id curto do job, não o da sessão inteira
+      t.sessao = atual
+    } else {
+      if (retomar) args.push('--resume', retomar)
+      if (texto) args.push(texto)
+    }
   } else if (t.tipo === 'codex') {
     arquivo = process.execPath
     args = [CODEX_JS, ...(texto ? [texto] : [])]
@@ -112,7 +131,9 @@ function abrirProcesso(t, { prompt, retomar } = {}) {
   }
   novaTela(t)
   enviarAosClientes(t, '\x1bc')
-  const p = pty.spawn(arquivo, args, { name: 'xterm-256color', cols: t.cols, rows: t.rows, cwd: t.cwd, env })
+  // No Windows 10 o console embutido corta o meio de colagens longas e quebra a colagem entre colchetes
+  // (o Claude enviava pedaços como mensagens). O conpty.dll que vem com o node-pty entrega o texto inteiro.
+  const p = pty.spawn(arquivo, args, { name: 'xterm-256color', cols: t.cols, rows: t.rows, cwd: t.cwd, env, useConptyDll: process.platform === 'win32' })
   Object.assign(t, { proc: p, pid: p.pid, vivo: true, codigo: null, status: 'trabalhando', ultimaSaida: Date.now(), abertoEm: Date.now() })
   p.onData((d) => {
     if (t.proc !== p) return
@@ -157,6 +178,9 @@ function noDoAgente({ terminal, pidPai, sessao } = {}) {
   const id = sessao || (pidPai ? sessaoPorPid(Number(pidPai))?.id : null)
   if (!id) return null
   for (const t of terminais.values()) if (t.sessao === id) return `t:${t.id}`
+  // sessão de fora presa a um agente do canvas: o que ela cria vai para o agente
+  const dono = canvas.donos?.[id]
+  if (dono && terminais.has(dono)) return `t:${dono}`
   return `s:${id}`
 }
 
@@ -173,7 +197,7 @@ export function criar(dados) {
   terminais.set(t.id, t)
   const retomar = t.tipo === 'claude' && dados.retomar ? String(dados.retomar) : null
   abrirProcesso(t, { prompt: dados.prompt, retomar })
-  if (retomar) t.sessao = retomar
+  if (retomar && !t.sessao) t.sessao = retomar // abrirProcesso já pôs a de segundo plano, quando é o caso
   avisar()
   gravar()
   return meta(t)
@@ -183,13 +207,16 @@ export function criar(dados) {
  * Traz uma sessão do Claude aberta fora para o canvas: fecha o processo de fora, abre um terminal na mesma
  * pasta retomando a mesma conversa e, se ela estava trabalhando, manda continuar de onde parou.
  */
-export async function migrar(sessao) {
+export async function migrar(sessao, pai = null) {
   const a = sessaoAberta(sessao)
   if (!a) throw new Error('a sessão não está aberta')
   for (const t of terminais.values()) if (t.sessao === sessao && t.vivo) throw new Error('a sessão já está no canvas')
   if (!temConversa(sessao)) throw new Error('a conversa ainda não tem mensagens: não há o que levar')
-  const trabalhando = a.status === 'trabalhando'
-  if (a.pid) {
+  const trabalhando = a.status === 'trabalhando' || a.esperando
+  // vira terminal: sai da lista de sessões presas (com pai, entra como trabalhador do agente)
+  if (canvas.donos?.[sessao] !== undefined) { const { [sessao]: _, ...resto } = canvas.donos; canvas.donos = resto }
+  // em segundo plano não fecha: o terminal novo entra nela com attach
+  if (a.pid && !a.bg) {
     try { process.kill(a.pid) } catch { /* já saiu */ }
     // espera o processo sair para não ter dois escrevendo na mesma conversa
     for (let i = 0; i < 50; i++) {
@@ -199,7 +226,7 @@ export async function migrar(sessao) {
   }
   return criar({
     // sem título fixo: o nó mostra o título da conversa (e acompanha se ele mudar)
-    tipo: 'claude', cwd: a.cwd || undefined, retomar: sessao,
+    tipo: 'claude', cwd: a.cwd || undefined, retomar: sessao, pai: pai || undefined,
     prompt: trabalhando ? 'Esta conversa foi movida para o canvas do painel no meio de um trabalho. Continue exatamente de onde parou.' : undefined,
   })
 }
@@ -362,18 +389,22 @@ function normalizarAbas(abas) {
   return out.length ? out : undefined
 }
 
-export function criarBloco({ tipo, titulo, texto, itens, abas, origem, ligarEm }) {
+export function criarBloco({ tipo, titulo, texto, itens, abas, origem, ligarEm, posicao, cor }) {
   const ehLista = tipo === 'checklist'
   const b = { id: `b${crypto.randomBytes(3).toString('hex')}`, tipo: ehLista ? 'checklist' : 'nota', titulo: String(titulo || '').slice(0, 80) || (ehLista ? 'Checklist' : 'Nota'), texto: String(texto || ''), itens: [], seq: 0, criadoEm: Date.now() }
   if (Array.isArray(itens)) b.itens = normalizarItens(b, itens.map((i) => (typeof i === 'string' ? { texto: i } : i)))
   if (!ehLista && normalizarAbas(abas)) { b.abas = normalizarAbas(abas); b.texto = b.abas[0].texto }
+  if (/^#[0-9a-f]{3,8}$/i.test(String(cor || ''))) b.cor = String(cor)
   canvas.blocos.push(b)
+  // o Ctrl+Z de um bloco apagado o recria já no lugar dele, sem pular de posição
+  const p0 = posicao && Number.isFinite(Number(posicao.x)) && Number.isFinite(Number(posicao.y)) ? posicao : null
+  if (p0) canvas.posicoes[`b:${b.id}`] = { x: Number(p0.x), y: Number(p0.y), ...(Number(p0.w) > 0 ? { w: Number(p0.w) } : {}), ...(Number(p0.h) > 0 ? { h: Number(p0.h) } : {}) }
   // criado por um agente (ou a partir de um nó): já nasce ligado ao chat, à esquerda dele
   const no = ligarEm && noExiste(ligarEm) ? ligarEm : noDoAgente(origem)
   if (no) {
     ligar(`b:${b.id}`, no)
     const p = canvas.posicoes[no]
-    if (p) {
+    if (p && !p0) {
       const irmaos = canvas.ligacoes.filter((l) => l.para === no && l.de.startsWith('b:')).length - 1
       canvas.posicoes[`b:${b.id}`] = { x: p.x - 340, y: p.y + irmaos * 250 }
     }
@@ -476,7 +507,17 @@ export function enviarBloco(id) {
 
 // ---------- Formas do quadro, como no Figma: frame, retângulo, texto, imagem e traço do lápis ----------
 
-const TIPOS_FORMA = ['frame', 'retangulo', 'texto', 'imagem', 'desenho', 'video']
+const TIPOS_FORMA = ['frame', 'retangulo', 'texto', 'imagem', 'desenho', 'video', 'pagina']
+
+/** Página embutida (MCP abrir_pagina): só http ou https, para o iframe do canvas. */
+function enderecoDaPagina(url) {
+  let u
+  try { u = new URL(String(url || '').trim()) } catch { throw new Error('endereço inválido: use http:// ou https://') }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('endereço inválido: use http:// ou https://')
+  const s = u.toString()
+  if (s.length > 2000) throw new Error('endereço longo demais')
+  return s
+}
 const acharForma = (id) => canvas.formas.find((f) => f.id === id)
 const num = (v, padrao) => (Number.isFinite(Number(v)) ? Number(v) : padrao)
 
@@ -486,7 +527,8 @@ function limparPontos(pontos) {
   return pontos.slice(0, 4000).filter((p) => Array.isArray(p) && p.length === 2).map(([x, y]) => [Math.round(num(x, 0) * 1000) / 1000, Math.round(num(y, 0) * 1000) / 1000])
 }
 
-function campos(f, { cor, texto, tamanho, pontos, espessura, opacidade }) {
+function campos(f, { cor, texto, tamanho, pontos, espessura, opacidade, url }) {
+  if (url !== undefined && f.tipo === 'pagina') f.url = enderecoDaPagina(url)
   if (typeof cor === 'string') f.cor = cor.slice(0, 40)
   if (opacidade !== undefined) f.opacidade = Math.min(Math.max(num(opacidade, 5), 0), 100) // fundo do frame, em %
   if (texto !== undefined) f.texto = String(texto).slice(0, 20000)
@@ -502,10 +544,11 @@ export function criarForma({ tipo, x, y, w, h, url, origem, ligarEm, ...resto })
     if (typeof url !== 'string' || !url.startsWith('/api/formas/imagem/')) throw new Error(`${tipo} inválido`)
     f.url = url
   }
+  if (tipo === 'pagina') f.url = enderecoDaPagina(url)
   if (tipo === 'frame') f.texto = 'Frame'
   campos(f, resto)
   canvas.formas.push(f)
-  const padrao = tipo === 'video' ? { w: 360, h: 400 } : { w: 200, h: 120 }
+  const padrao = tipo === 'video' ? { w: 360, h: 400 } : tipo === 'pagina' ? { w: 1024, h: 720 } : { w: 200, h: 120 }
   let pos = { x: num(x, 0), y: num(y, 0), w: Math.max(num(w, padrao.w), 8), h: Math.max(num(h, padrao.h), 8) }
   // mostrada por um agente (MCP): nasce ligada a ele, em fila embaixo do nó dele
   const no = ligarEm && noExiste(ligarEm) ? ligarEm : origem ? noDoAgente(origem) : null
@@ -551,7 +594,7 @@ export function apagarForma(id) {
   canvas.ligacoes = canvas.ligacoes.filter((l) => l.de !== `f:${id}` && l.para !== `f:${id}`)
   delete canvas.posicoes[`f:${id}`]
   // a imagem sai do disco só quando nenhuma outra forma a usa
-  if (f.url && !canvas.formas.some((x) => x.url === f.url)) fs.rm(path.join(DIR_IMAGENS, path.basename(f.url)), { force: true }, () => {})
+  if (f.url?.startsWith('/api/formas/imagem/') && !canvas.formas.some((x) => x.url === f.url)) fs.rm(path.join(DIR_IMAGENS, path.basename(f.url)), { force: true }, () => {})
   avisar()
   gravar()
   return true
@@ -652,7 +695,8 @@ function pedidoDeHandoff(arquivo, limite) {
 
 function passagemDeContexto(t) {
   const h = canvas.handoff
-  if (!h?.ligado || t.tipo !== 'claude' || !t.vivo) return
+  // em segundo plano a conversa vive fora do terminal: fechar o terminal não a para, e o chat novo trabalharia junto
+  if (!h?.ligado || t.tipo !== 'claude' || !t.vivo || sessaoAberta(t.sessao)?.bg) return
   const agora = Date.now()
   if (!t.handoff) {
     if (t.status !== 'parada' || t.contexto < h.limite || agora - t.ultimoHandoff < 10 * 60e3) return
@@ -698,6 +742,10 @@ function ciclo() {
         if (s.id !== t.sessao) { t.sessao = s.id; gravar(); avisar() }
         if (s.contexto !== t.contexto) { t.contexto = s.contexto; avisar() }
         st = s.status === 'trabalhando' ? 'trabalhando' : 'parada'
+      } else {
+        // terminal com attach: o processo dele não é a sessão; o status vem da de segundo plano
+        const a = sessaoAberta(t.sessao)
+        if (a?.bg) st = a.status === 'trabalhando' ? 'trabalhando' : 'parada'
       }
     }
     if (!st) st = agora - t.ultimaSaida < 4000 ? 'trabalhando' : 'parada'
@@ -729,9 +777,10 @@ function conectar(t, ws) {
 }
 
 let iniciado = false
-export function iniciarTerminais({ porPid, aberta }) {
+export function iniciarTerminais({ porPid, aberta, continua }) {
   sessaoPorPid = porPid
   if (aberta) sessaoAberta = aberta
+  if (continua) continuacao = continua
   ligarWidgets({ canvas, terminais, mandar, avisar, gravar })
   if (iniciado) return
   iniciado = true
@@ -759,8 +808,73 @@ export function iniciarTerminais({ porPid, aberta }) {
     if (voltar.length) { avisar(); gravar() }
   }, 1500)
   setInterval(ciclo, 1000).unref()
+  setInterval(lerDonos, 4000).unref()
   const encerrar = () => { for (const t of terminais.values()) try { t.proc?.kill() } catch { /* já saiu */ } }
   process.once('exit', encerrar)
+}
+
+// ---------- Sessões de fora que são de um agente do canvas ----------
+
+/**
+ * Prende (terminal) ou solta (null) uma sessão de fora: presa, ela aparece embaixo do agente, como os subagentes.
+ * Soltar à mão grava null, para a marca do MCP não prender de novo.
+ */
+export function marcarDono(sessao, terminal) {
+  const id = String(sessao || '').slice(0, 80)
+  if (!/^[\w-]+$/.test(id)) throw new Error('sessão inválida')
+  if (terminal !== null && !terminais.has(String(terminal))) throw new Error('agente não encontrado no canvas')
+  canvas.donos = { ...(canvas.donos || {}), [id]: terminal === null ? null : String(terminal) }
+  avisar()
+  gravar()
+  return { sessao: id, dono: canvas.donos[id] }
+}
+
+/** Lê as marcas que o MCP das sessões grava (COLMEIA_DONO) e prende cada sessão nova ao terminal dono. */
+function lerDonos() {
+  let arquivos = []
+  try { arquivos = fs.readdirSync(DIR_DONOS).filter((f) => f.endsWith('.json')) } catch { return }
+  const proprias = new Set([...terminais.values()].map((t) => t.sessao).filter(Boolean))
+  let mudou = false
+  for (const f of arquivos) {
+    const arq = path.join(DIR_DONOS, f)
+    let m
+    try { m = JSON.parse(fs.readFileSync(arq, 'utf8')) } catch { continue }
+    let vivo = false
+    try { process.kill(Number(m.pid), 0); vivo = true } catch (e) { vivo = e.code === 'EPERM' }
+    if (!vivo) { fs.rm(arq, { force: true }, () => {}); continue }
+    const sessao = sessaoPorPid(Number(m.pid))?.id
+    if (!sessao || proprias.has(sessao) || (canvas.donos && sessao in canvas.donos) || !terminais.has(String(m.dono))) continue
+    canvas.donos = { ...(canvas.donos || {}), [sessao]: String(m.dono) }
+    mudou = true
+  }
+  if (mudou) { avisar(); gravar() }
+  vigiarPresas()
+}
+
+// O usuário só fala com o agente: sessão presa que parou pedindo permissão ou resposta vira aviso para o dono,
+// que a traz para o canvas como trabalhador (trazer_sessao) e responde ele mesmo. Um aviso por parada.
+const avisadas = new Map() // sessão -> texto do aviso
+function vigiarPresas() {
+  for (const [sessao, dono] of Object.entries(canvas.donos || {})) {
+    const t = dono ? terminais.get(dono) : null
+    const a = t?.vivo ? sessaoAberta(sessao) : null
+    if (!a?.esperando) {
+      // saiu da espera antes de o dono parar para ler: o aviso ainda na fila já não vale
+      const texto = avisadas.get(sessao)
+      if (texto && t) { const i = t.avisos.indexOf(texto); if (i >= 0) { t.avisos.splice(i, 1); avisar() } }
+      avisadas.delete(sessao)
+      continue
+    }
+    if (avisadas.has(sessao)) continue
+    const qual = /permiss/i.test(a.motivo || '') ? 'um pedido de permissão' : 'uma resposta'
+    const texto = [
+      `[Aviso do painel] A sessão "${a.nome || sessao.slice(0, 8)}" (${sessao}), que você abriu fora do canvas, está parada esperando ${qual}.`,
+      'O usuário não responde a sessões abertas por agentes: quem responde é você.',
+      `Traga-a para o canvas como seu trabalhador com a ferramenta trazer_sessao (sessao: "${sessao}"), depois veja o pedido com esperar_terminal ou ler_terminal e responda com mandar_terminal.`,
+    ].join('\n')
+    avisadas.set(sessao, texto)
+    mandar(t.id, texto, true)
+  }
 }
 
 /** WebSocket /api/terminais/<id>/ws?chave=... no mesmo servidor do Vite (o HMR usa outro protocolo). */

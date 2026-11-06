@@ -21,6 +21,7 @@ Sessões abertas, o que cada uma está fazendo agora, contexto usado, uso do dia
 - **Terminais de verdade** (Claude, Codex, PowerShell e Git) dentro do canvas: dá para ver a resposta e digitar direto no terminal. Colar, rolar e selecionar texto funcionam em qualquer zoom.
 - **Notas e checklists** ligadas a um terminal arrastando do ponto, como no n8n. *Enviar* manda a nota para o agente; *Executar* manda a checklist e o agente marca cada item. A nota tem abas como o Bloco de Notas do Windows 11: + cria, duplo clique renomeia, x ou botão do meio fecha. Nota tem fundo azul e checklist verde; o botão direito troca a cor.
 - **Vídeos e imagens dos agentes**: com o `mostrar_video`, o agente põe no canvas o que gerou (por exemplo, 5 versões de um vídeo), ligado a ele. Cada vídeo tem *Escolher esta versão*, e a escolha chega no terminal do agente.
+- **Páginas para testar**: com o `abrir_pagina`, o agente abre no canvas a página que quer que você teste (um localhost, um preview), num navegador embutido ligado a ele. Um clique libera a página; tem endereço, recarregar e abrir em outra aba.
 - **Organizar**: um clique monta um frame por agente, com as notas e checklists à esquerda, o terminal no centro (subagentes, trabalhadores e vídeos embaixo) e o Git e os widgets à direita. O resto vai numa fila embaixo. Ctrl+Z desfaz.
 - **Ir até o agente**: o botão de mira no dock lista os agentes e leva a visão até o frame de cada um. Tab vai ao próximo, Shift+Tab ao anterior e, segurando Tab, as setas andam só entre os que estão trabalhando. Com um terminal selecionado, o Tab fica com ele.
 - **Janela do Git**: branch, à frente/atrás, arquivos alterados, últimos commits e um terminal na pasta.
@@ -63,10 +64,13 @@ O terminal mostra o endereço com a chave, por exemplo `http://192.168.0.10:5190
 - A chave fica em `.chave`. Apague o arquivo para gerar outra.
 - `PAINEL_DIAS=7 npm run dev` muda o período lido (padrão: 30 dias).
 - `npm run conferir` lê tudo uma vez e imprime o resumo no terminal, sem subir a tela.
+- **Atualizar**: a cada 5 minutos o painel confere o GitHub. Quando há versão nova, aparece o botão *Atualizar* no topo: ele faz `git pull`, roda `npm install` se as dependências mudaram e reinicia o painel (os terminais reabrem sozinhos; a saída passa a ir para `painel.log`). Se você mudou à mão um arquivo que a versão nova também muda, o Git recusa e nada é mexido.
 
 ## MCP `painel`
 
-Ferramentas: `criar_nota` (com abas, se quiser), `editar_nota`, `criar_checklist`, `adicionar_itens`, `marcar_item`, `mostrar_video`, `ver_canvas`, `abrir_git`, `abrir_terminal`, `esperar_terminal`, `ler_terminal`, `mandar_terminal` e `fechar_terminal`. O que o agente cria nasce ligado ao nó dele no canvas.
+Ferramentas: `criar_nota` (com abas, se quiser), `editar_nota`, `criar_checklist`, `adicionar_itens`, `marcar_item`, `mostrar_video`, `abrir_pagina`, `ver_canvas`, `abrir_git`, `abrir_terminal`, `trazer_sessao`, `esperar_terminal`, `ler_terminal`, `mandar_terminal` e `fechar_terminal`. O que o agente cria nasce ligado ao nó dele no canvas.
+
+Você só fala com o agente. Sessão que ele abre fora do canvas aparece presa embaixo dele; se ela parar pedindo permissão, o painel avisa o agente (não você), e ele a traz como trabalhador com `trazer_sessao` e responde.
 
 Claude Code:
 

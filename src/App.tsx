@@ -20,6 +20,7 @@ import { Kpis } from '@/components/painel/Kpis'
 import { Porcentagens } from '@/components/painel/Porcentagens'
 import { HaQuanto } from '@/components/painel/comum'
 import { Canvas } from '@/components/canvas/Canvas'
+import { Atualizar } from '@/components/painel/Atualizar'
 
 function lerTema() {
   try { return localStorage.getItem('painel-tema') || 'dark' } catch { return 'dark' }
@@ -104,6 +105,7 @@ export default function App() {
               {tema === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
             </Button>
           </div>
+          {dados?.atualizacao && <Atualizar a={dados.atualizacao} />}
         </div>
       </header>
 

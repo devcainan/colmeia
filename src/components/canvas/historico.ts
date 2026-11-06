@@ -8,7 +8,8 @@ export type Passo = { desfazer: () => unknown; refazer: () => unknown }
 const LIMITE = 100
 const pilha: Passo[] = []
 let refeitos: Passo[] = []
-let ocupado = false
+// os passos rodam em fila: Ctrl+Z apertado várias vezes seguidas desfaz todos, sem perder nenhum
+let fila: Promise<unknown> = Promise.resolve()
 
 // nó recriado ganha id novo no servidor: o id antigo aponta para o novo, para os passos seguintes acharem
 const apelidos = new Map<string, string>()
@@ -45,12 +46,13 @@ export function juntar(passos: Passo[]): Passo | null {
   }
 }
 
-async function rodar(de: Passo[], para: Passo[], lado: keyof Passo) {
-  if (ocupado) return
-  const p = de.pop()
-  if (!p) return
-  ocupado = true
-  try { await p[lado](); para.push(p) } catch { /* o servidor recusou: o passo sai do histórico */ } finally { ocupado = false }
+function rodar(de: Passo[], para: Passo[], lado: keyof Passo) {
+  fila = fila.then(async () => {
+    const p = de.pop()
+    if (!p) return
+    try { await p[lado](); para.push(p) } catch { /* o servidor recusou: o passo sai do histórico */ }
+  })
+  return fila
 }
 export const desfazer = () => rodar(pilha, refeitos, 'desfazer')
 export const refazer = () => rodar(refeitos, pilha, 'refazer')
@@ -101,11 +103,11 @@ function copiar(no: string): Copia | null {
 }
 
 async function recriarBloco(no: string, c: Copia) {
-  const novo = await enviar<Bloco>('POST', '/api/blocos', { tipo: c.b.tipo, titulo: c.b.titulo, texto: c.b.texto, itens: c.b.itens })
+  // volta já no lugar, com abas e cor, num pedido só
+  const novo = await enviar<Bloco>('POST', '/api/blocos', { tipo: c.b.tipo, titulo: c.b.titulo, texto: c.b.texto, itens: c.b.itens, abas: c.b.abas, cor: c.b.cor, posicao: c.p })
   const nn = `b:${novo.id}`
   const velho = resolver(no)
   apelidar(velho, nn)
-  if (c.p) await enviar('PUT', '/api/canvas', { posicoes: { [nn]: c.p } })
   for (const l of c.ligacoes) {
     const de = l.de === velho ? nn : resolver(l.de)
     const para = l.para === velho ? nn : resolver(l.para)
