@@ -1,10 +1,11 @@
 import { createContext, memo, useContext, useEffect, useRef, useState } from 'react'
 import { Handle, NodeResizer, Position, useStore, type Node, type NodeProps } from '@xyflow/react'
-import { ArrowDown, ArrowUp, Check, Circle, CircleCheck, CircleDot, ExternalLink, Film, Globe, ListChecks, Maximize2, MousePointerClick, Network, Plus, RotateCcw, RotateCw, Send, StickyNote, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Bot, Check, Circle, CircleCheck, CircleDot, ExternalLink, Eye, Film, Globe, ListChecks, Maximize2, MousePointerClick, Network, Plus, RotateCcw, RotateCw, Search, Send, StickyNote, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { api, enviar } from '@/lib/dados'
-import { AGENTES, STATUS, corContexto, fmtPct, mistura, opaco, statusDaTarefa, tarefa } from '@/lib/formato'
+import { api, enviar, useTique } from '@/lib/dados'
+import { AGENTES, STATUS, corContexto, fmtPct, fmtReais, fmtTokens, haQuanto, mistura, nomeModelo, opaco, statusDaTarefa, tarefa } from '@/lib/formato'
 import type { AbaNota, Bloco, EstadoGit, EstadoItem, Forma, Posicao, Sessao, SubResumo, Terminal } from '@/lib/tipos'
 import { ProgressoChecklist } from '@/components/painel/CartaoSessao'
 import { Validar } from '@/components/painel/Validar'
@@ -264,23 +265,61 @@ export const NoSessao = memo(function NoSessao({ id, data }: NodeProps<Node<Dado
   )
 })
 
+// tipo do subagente (agentType) -> ícone e cor: pesquisa azul, revisão rosa, plano amarelo, o resto violeta
+function tipoDoSub(nome: string | null) {
+  const n = nome || ''
+  if (/explor|search|investig|find/i.test(n)) return { Icone: Search, cor: 'var(--ev-pedido)' }
+  if (/review|audit|secur/i.test(n)) return { Icone: Eye, cor: 'var(--ev-subagente)' }
+  if (/plan/i.test(n)) return { Icone: ListChecks, cor: 'var(--ev-plano)' }
+  return { Icone: Bot, cor: 'var(--ev-comando)' }
+}
+const fmtTempo = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` }
+
+/** Pílula pendurada no agente: anel em volta do ícone (gira enquanto trabalha), título e tempo; o resto aparece no hover. */
 export const NoSubagente = memo(function NoSubagente({ data }: NodeProps<Node<DadosSub>>) {
-  const { sub, sessao } = data
-  const st = STATUS[sub.status]
+  const { sub, sessao, agente } = data
+  const { abrirSessao } = useContext(Acoes)
+  const agora = useTique(1000)
+  // o usuário não responde quem espera: o painel avisa o agente dono, que traz a sessão para o canvas e responde
+  const st = sub.esperando ? 'espera' : sub.status
+  const tipo = sessao ? { Icone: ExternalLink, cor: AGENTES[agente].cor } : tipoDoSub(sub.nome)
+  const fim = st === 'fechada'
+  const cor = fim ? 'var(--ok)' : tipo.cor
+  const anel = st === 'espera' ? 'var(--espera)' : st === 'parada' ? 'var(--fechada)' : 'var(--ok)'
+  const tempo = sub.inicio ? fmtTempo((st === 'trabalhando' ? agora : sub.ultima || agora) - sub.inicio) : null
+  const titulo = sub.titulo || sub.nome || 'subagente'
+  const linha = st === 'espera' ? <span style={{ color: 'var(--espera)' }}>esperando {/permiss/i.test(sub.esperando || '') ? 'permissão' : 'resposta'}</span>
+    : st === 'trabalhando' ? [tempo, sub.total && fmtTokens(sub.total)].filter(Boolean).join(' · ')
+    : st === 'parada' ? (sessao ? 'sessão parada' : `parado ${haQuanto(sub.ultima, agora)}`) : null
+  const detalhes = ([
+    sub.fazendo && st === 'trabalhando' ? ['Agora', sub.fazendo] : null,
+    [sessao ? 'Agente · modelo' : 'Tipo · modelo', [sessao ? `${AGENTES[agente].rotulo} (sessão de fora)` : sub.nome || 'subagente', sub.modelo && nomeModelo(sub.modelo)].filter(Boolean).join(' · ')],
+    ['Tempo · tokens', `${tempo || '-'} · ${fmtTokens(sub.total)}`],
+    ['Custo', fmtReais(sub.custo)],
+  ].filter(Boolean) as [string, string][])
   return (
-    <div className={cn('grid h-full w-full content-center gap-0.5 rounded-lg border bg-card px-2.5 py-1.5 shadow-sm', sub.status === 'trabalhando' && 'borda-viva')}
-      style={{ borderColor: mistura(COR.subagente, 50) }} title={sessao ? 'Sessão aberta por este agente (fora do canvas)' : undefined}>
-      <Cima cor={COR.subagente} />
-      <div className="flex items-center gap-1.5">
-        <Network className="size-3 shrink-0" style={{ color: COR.subagente }} />
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{sub.titulo || sub.nome || 'subagente'}</span>
-        <Ponto cor={st.cor} vivo={sub.status === 'trabalhando'} />
-      </div>
-      {sub.esperando
-        // o usuário não responde: o painel avisou o agente dono, que traz a sessão para o canvas e responde
-        ? <p className="truncate text-[10px] text-amber-500">esperando {/permiss/i.test(sub.esperando) ? 'permissão' : 'resposta'} · o agente responde</p>
-        : <p className="truncate text-[10px] text-muted-foreground">{sub.status === 'trabalhando' ? sub.fazendo || 'trabalhando' : sessao ? 'sessão parada' : 'terminou'}</p>}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div onDoubleClick={() => abrirSessao(sub.id)}
+          className={cn('mx-auto flex h-full w-fit max-w-full items-center gap-2 rounded-full border bg-card pl-[5px] pr-3 shadow-md', fim && 'opacity-45', st === 'parada' && 'opacity-70')}
+          style={st === 'espera' ? { borderColor: 'var(--espera)', background: opaco('var(--espera)', 10) } : undefined}>
+          <Cima cor={anel} />
+          <span className={cn('anel-sub relative grid size-[30px] shrink-0 place-items-center rounded-full', st === 'trabalhando' && 'girando')}
+            style={{ ['--cor-anel' as string]: anel, background: mistura(cor, 20), color: cor }}>
+            {fim ? <Check className="size-3.5" /> : <tipo.Icone className="size-3.5" />}
+          </span>
+          <span className="grid min-w-0">
+            <span className="truncate text-xs font-medium">{titulo}</span>
+            {linha && <span className="truncate font-mono text-[10px] text-muted-foreground">{linha}</span>}
+          </span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={8} className="grid w-72 gap-1 text-xs">
+        <p className="mb-0.5 font-medium">{titulo}</p>
+        {detalhes.map(([r, v]) => <div key={r} className="flex justify-between gap-4"><span className="shrink-0 opacity-60">{r}</span><span className="truncate">{v}</span></div>)}
+        <p className="mt-0.5 opacity-60">duplo clique: ver a conversa</p>
+      </TooltipContent>
+    </Tooltip>
   )
 })
 

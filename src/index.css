@@ -237,6 +237,21 @@
     z-index: 2;
 }
 
+/* anel em volta do ícone do subagente no canvas: cheio quando para, arco girando enquanto trabalha */
+.anel-sub::before {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: inherit;
+    background: var(--cor-anel);
+    mask: radial-gradient(closest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+    pointer-events: none;
+}
+.anel-sub.girando::before {
+    background: conic-gradient(from var(--angulo), var(--cor-anel) 0 30%, color-mix(in oklch, var(--cor-anel) 15%, transparent) 30%);
+    animation: girar 1.4s linear infinite;
+}
+
 .ponto-vivo { position: relative; }
 .ponto-vivo::after {
     content: '';

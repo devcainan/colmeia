@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { api, enviar } from '@/lib/dados'
+import { api, enviar, useTique } from '@/lib/dados'
 import { AGENTES, statusDaTarefa } from '@/lib/formato'
 import type { Bloco, EstadoCanvas, Forma, Ligacao, Posicao, Sessao, Terminal, TipoForma, TipoTerminal, TipoWidget, Widget } from '@/lib/tipos'
 import {
@@ -37,7 +37,7 @@ const TIPOS_DE_NO = { ...tiposDeNo, widget: NoWidget }
 
 const TAM: Record<string, { w: number; h: number }> = {
   terminal: { w: 680, h: 500 }, git: { w: 700, h: 600 }, sessao: { w: 300, h: 150 },
-  subagente: { w: 230, h: 54 }, nota: { w: 280, h: 220 }, checklist: { w: 300, h: 300 },
+  subagente: { w: 200, h: 40 }, nota: { w: 280, h: 220 }, checklist: { w: 300, h: 300 },
   frame: { w: 480, h: 320 }, retangulo: { w: 200, h: 120 }, texto: { w: 240, h: 40 }, imagem: { w: 320, h: 240 }, desenho: { w: 100, h: 100 },
   video: { w: 360, h: 400 }, pagina: { w: 1024, h: 720 },
 }
@@ -105,7 +105,9 @@ async function subirImagem(arq: Blob) {
 }
 
 const medidaDaImagem = (arq: Blob) => createImageBitmap(arq).then((b) => { const m = { w: b.width, h: b.height }; b.close(); return m }).catch(() => ({ w: 320, h: 240 }))
+// subagente concluído sai do canvas em 30 s; o parado sem ter concluído (comando longo, interrompido) fica 15 min
 const SUB_RECENTE = 15 * 60 * 1000
+const SUB_FIM = 30 * 1000
 
 const salvar = (posicoes: Record<string, Posicao>) => { void enviar('PUT', '/api/canvas', { posicoes }).catch(() => {}) }
 
@@ -465,14 +467,17 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
     }))), [sessoes, terminalDaSessao])
 
   // subagentes ativos ou recentes de cada sessão visível
+  // o servidor só manda novidade a cada 30 s quando está tudo quieto: o relógio tira o concluído na hora certa
+  const tique = useTique(5000)
   const subs = useMemo(() => {
-    const agora = Date.now()
+    const agora = tique
     const out: { id: string; pai: string; d: DadosSub }[] = []
     for (const s of sessoes) {
       const pai = noDaSessao(s.id)
       if (!pai) continue
       for (const sub of s.subagentes) {
-        if (sub.status === 'trabalhando' || (sub.ultima && agora - sub.ultima < SUB_RECENTE)) out.push({ id: `sub:${sub.id}`, pai, d: { sub, agente: s.agente } })
+        const janela = sub.status === 'fechada' ? SUB_FIM : SUB_RECENTE
+        if (sub.status === 'trabalhando' || (sub.ultima && agora - sub.ultima < janela)) out.push({ id: `sub:${sub.id}`, pai, d: { sub, agente: s.agente } })
       }
     }
     // sessões de fora que um agente abriu: em fila embaixo dele, como os subagentes
@@ -483,7 +488,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       out.push({ id: `sub:${s.id}`, pai: `t:${dono}`, d: { sub, agente: s.agente, sessao: true } })
     }
     return out
-  }, [sessoes, noDaSessao, donoDaSessao, terminalDaSessao])
+  }, [sessoes, noDaSessao, donoDaSessao, terminalDaSessao, tique])
 
   useEffect(() => {
     setNos((antes) => {
@@ -577,7 +582,10 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       if (origem) out.push({ id: `e:${origem}-${t.id}`, type: 'corte', source: origem, sourceHandle: 'baixo', target: `t:${t.id}`, targetHandle: 'cima', animated: t.status === 'trabalhando', data: { soltar: t.id }, style: { stroke: t.papel === 'trabalhador' ? COR.trabalhador : corDoTerminal(t), strokeWidth: 2 } })
     }
     for (const x of subs) {
-      out.push({ id: `e:${x.id}`, source: x.pai, sourceHandle: 'baixo', target: x.id, targetHandle: 'cima', animated: x.d.sub.status === 'trabalhando', deletable: false, style: { stroke: COR.subagente, strokeWidth: 1.5, strokeDasharray: x.d.sub.status === 'trabalhando' ? undefined : '4 4' } })
+      // fio na cor do estado, como o anel da pílula: verde trabalhando, âmbar esperando, tracejado cinza quando para
+      const { status, esperando } = x.d.sub
+      const cor = esperando ? 'var(--espera)' : status === 'trabalhando' ? 'var(--ok)' : 'var(--fechada)'
+      out.push({ id: `e:${x.id}`, source: x.pai, sourceHandle: 'baixo', target: x.id, targetHandle: 'cima', animated: status === 'trabalhando', deletable: false, style: { stroke: cor, strokeWidth: 1.5, strokeDasharray: status === 'trabalhando' || esperando ? undefined : '4 4' } })
     }
     for (const l of canvas.ligacoes) {
       const bloco = [l.de, l.para].find((n) => n.startsWith('b:'))
