@@ -1055,9 +1055,9 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
     }
   }, [])
 
-  // ---------- Organizar: um frame por frente (cada agente e o que é dele), lado a lado ----------
-  // dentro do frame: notas e checklists à esquerda, o terminal no centro com subagentes, trabalhadores, vídeos e
-  // páginas embaixo, Git e widgets à direita. O resto vai numa fila embaixo, e as sessões de fora numa fila no fim.
+  // ---------- Organizar: um frame por frente (cada agente e o que é dele), em fileiras do formato da tela ----------
+  // dentro do frame: o terminal no meio com subagentes, trabalhadores, vídeos e páginas embaixo; notas, checklists,
+  // Git e widgets em volta dele. O resto vai numa fila embaixo, e as sessões de fora numa fila no fim.
   const organizar = async () => {
     const lista = nosRef.current
     const porId = new Map(lista.map((n) => [n.id, n]))
@@ -1073,14 +1073,86 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
     const CORES_FRENTE = ['#fb923c', '#38bdf8', '#e879f9', '#4ade80', '#facc15', '#818cf8', '#2dd4bf', '#f87171']
     const x0 = Math.min(...conteudo.map((n) => n.position.x))
     const y0 = Math.min(...conteudo.map((n) => n.position.y))
+    // formato da tela: frame e conjunto tentam caber nela, sem faixa comprida nem torre
+    const A = Math.min(2.4, Math.max(1.2, window.innerWidth / Math.max(1, window.innerHeight)))
+    const G = VAO * 2
+    type Coluna = { ids: string[]; w: number; h: number }
+    type Lado = 'L' | 'R' | 'T' | 'B'
+    const largDe = (cols: Coluna[]) => (cols.length ? cols.reduce((s, c) => s + c.w, 0) + VAO * (cols.length - 1) : 0)
+    const altDe = (cols: Coluna[]) => Math.max(0, ...cols.map((c) => c.h))
+    // o agente (cw x ch, canto em 0,0) no meio e os itens em volta: cada um vai para o lado que deixa o frame mais
+    // perto do formato da tela; a conta é simétrica (o lado maior vale pelos dois), então os lados se equilibram
+    const emVolta = (cw: number, ch: number, ids: string[]) => {
+      const lados: Record<Lado, Coluna[]> = { L: [], R: [], T: [], B: [] }
+      const ocupado: Record<Lado, number> = { L: 0, R: 0, T: 0, B: 0 }
+      const meio = () => Math.max(cw, largDe(lados.T), largDe(lados.B))
+      const custo = () => {
+        const wl = largDe(lados.L), wr = largDe(lados.R), ht = altDe(lados.T), hb = altDe(lados.B)
+        const w = meio() + 2 * Math.max(wl && wl + G, wr && wr + G)
+        const h = Math.max(ch + 2 * Math.max(ht && ht + G, hb && hb + G), altDe(lados.L), altDe(lados.R))
+        return [Math.max(w, h * A), w * h]
+      }
+      for (const id of ids) {
+        const t = tam(id)
+        const tentativas: { lado: Lado; fazer: () => () => void }[] = []
+        // empate fica com o lado mais vazio
+        for (const k of (['L', 'R', 'B', 'T'] as Lado[]).sort((a, b) => ocupado[a] - ocupado[b])) {
+          const cols = lados[k]
+          if (cols.length) tentativas.push({ lado: k, fazer: () => {
+            const c = cols.reduce((a, b) => (b.h < a.h ? b : a))
+            const { w, h } = c
+            c.ids.push(id); c.w = Math.max(w, t.w); c.h = h + VAO + t.h
+            return () => { c.ids.pop(); c.w = w; c.h = h }
+          } })
+          // coluna nova; em cima e embaixo, só enquanto couber na largura do meio
+          if (k === 'L' || k === 'R' || !cols.length || largDe(cols) + VAO + t.w <= meio()) tentativas.push({ lado: k, fazer: () => {
+            cols.push({ ids: [id], w: t.w, h: t.h })
+            return () => { cols.pop() }
+          } })
+        }
+        let escolha = tentativas[0]
+        let menor = [Infinity, Infinity]
+        for (const o of tentativas) {
+          const desfazer = o.fazer()
+          const c = custo()
+          desfazer()
+          if (c[0] < menor[0] || (c[0] === menor[0] && c[1] < menor[1])) { menor = c; escolha = o }
+        }
+        escolha.fazer()
+        ocupado[escolha.lado] += t.w * t.h
+      }
+      // posições: a primeira coluna de cada lado encosta no agente; as laterais ficam centradas na altura dele
+      const itens: [string, number, number][] = []
+      const m = meio()
+      let x = (cw - m) / 2 - G
+      for (const c of lados.L) {
+        let y = ch / 2 - c.h / 2
+        for (const id of c.ids) { itens.push([id, x - tam(id).w, y]); y += tam(id).h + VAO }
+        x -= c.w + VAO
+      }
+      x = (cw + m) / 2 + G
+      for (const c of lados.R) {
+        let y = ch / 2 - c.h / 2
+        for (const id of c.ids) { itens.push([id, x, y]); y += tam(id).h + VAO }
+        x += c.w + VAO
+      }
+      for (const [cols, acima] of [[lados.T, true], [lados.B, false]] as const) {
+        let x = cw / 2 - largDe(cols) / 2
+        for (const c of cols) {
+          let y = acima ? -G - c.h : ch + G
+          for (const id of c.ids) { itens.push([id, x, y]); y += tam(id).h + VAO }
+          x += c.w + VAO
+        }
+      }
+      return itens
+    }
     const feita = (id: string) => { const b = (porId.get(id)!.data as DadosBloco).b; return b.itens.length > 0 && b.itens.every((i) => i.estado === 'feito') }
     const raizes = canvas.terminais
       .filter((t) => !t.pai && !t.paiSessao && (t.tipo === 'claude' || t.tipo === 'codex') && porId.has(`t:${t.id}`))
       .sort((a, b) => porId.get(`t:${a.id}`)!.position.x - porId.get(`t:${b.id}`)!.position.x)
     const frames = lista.filter((n) => n.type === 'frame')
     const novosFrames: { caixa: { x: number; y: number; w: number; h: number }; texto: string; cor: string }[] = []
-    let fx = x0
-    let fundo = y0
+    const frentes: { itens: [string, number, number][]; w: number; h: number; fr?: string; texto: string; cor: string }[] = []
 
     raizes.forEach((r, i) => {
       const rid = `t:${r.id}`
@@ -1089,30 +1161,30 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
       while (fila.length) { const p = fila.shift()!; for (const t of canvas.terminais) if (t.pai === p && porId.has(`t:${t.id}`)) { desc.push(t); fila.push(t.id) } }
       const membros = [rid, ...desc.map((t) => `t:${t.id}`)]
       const ligados = [...new Set(membros.flatMap(ligadosA))].filter((x) => porId.has(x) && !usados.has(x) && !membros.includes(x))
-      const esquerda = [...ligados.filter((x) => porId.get(x)!.type === 'nota'), ...ligados.filter((x) => porId.get(x)!.type === 'checklist').sort((a, b) => Number(feita(a)) - Number(feita(b)))]
-      const direita = [...desc.filter((t) => t.tipo === 'git').map((t) => `t:${t.id}`), ...ligados.filter((x) => x.startsWith('w:'))]
+      // em volta do agente, dos mais perto aos mais longe: notas, checklists pendentes, Git, widgets e checklists feitas
+      const listas = ligados.filter((x) => porId.get(x)!.type === 'checklist')
+      const volta = [
+        ...ligados.filter((x) => porId.get(x)!.type === 'nota'), ...listas.filter((x) => !feita(x)),
+        ...desc.filter((t) => t.tipo === 'git').map((t) => `t:${t.id}`), ...ligados.filter((x) => x.startsWith('w:')), ...listas.filter(feita),
+      ]
       const trabs = desc.filter((t) => t.tipo !== 'git').map((t) => `t:${t.id}`)
       const midias = ligados.filter((x) => porId.get(x)!.type === 'video' || porId.get(x)!.type === 'imagem')
       const paginas = ligados.filter((x) => porId.get(x)!.type === 'pagina')
       const seusSubs = subs.filter((s) => membros.includes(s.pai) && porId.has(s.id)).map((s) => s.id)
 
-      const fy = y0
-      const lx = fx + PAD
-      let ly = fy + PAD
-      const L = esquerda.length ? Math.max(...esquerda.map((x) => tam(x).w)) : 0
-      for (const x of esquerda) { por(x, lx, ly); ly += tam(x).h + VAO }
-      const cx = lx + (L ? L + VAO * 2 : 0)
+      // o centro (terminal com subagentes, trabalhadores, vídeos e páginas embaixo), com (0, 0) no canto do terminal
+      const centro: [string, number, number][] = []
       const rt = tam(rid)
       const rn = porId.get(rid)!
       const centroAntes = { x: rn.position.x + rt.w / 2, y: rn.position.y + rt.h / 2 }
-      por(rid, cx, fy + PAD)
-      let cy = fy + PAD + rt.h
+      centro.push([rid, 0, 0])
+      let cy = rt.h
       let largura = rt.w
       const linha = (ids: string[], y: number, gap: number) => {
-        let x = cx
+        let x = 0
         let alto = 0
-        for (const id of ids) { const t = tam(id); por(id, x, y, t); x += t.w + gap; alto = Math.max(alto, t.h) }
-        largura = Math.max(largura, x - gap - cx)
+        for (const id of ids) { const t = tam(id); centro.push([id, x, y]); x += t.w + gap; alto = Math.max(alto, t.h) }
+        largura = Math.max(largura, x - gap)
         return alto
       }
       if (seusSubs.length) cy += 28 + linha(seusSubs, cy + 28, 14)
@@ -1122,31 +1194,61 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
         const mh = Math.max(...midias.map((x) => tam(x).h))
         const porLinha = Math.max(1, Math.floor((largura + 24) / (mw + 24)))
         const y1 = cy + 60
-        midias.forEach((id, k) => por(id, cx + (k % porLinha) * (mw + 24), y1 + Math.floor(k / porLinha) * (mh + 24)))
+        midias.forEach((id, k) => centro.push([id, (k % porLinha) * (mw + 24), y1 + Math.floor(k / porLinha) * (mh + 24)]))
         cy = y1 + Math.ceil(midias.length / porLinha) * (mh + 24) - 24
         largura = Math.max(largura, Math.min(midias.length, porLinha) * (mw + 24) - 24)
       }
       // páginas embutidas (abrir_pagina) são grandes: uma fileira só delas, embaixo dos vídeos
       if (paginas.length) cy += 60 + linha(paginas, cy + 60, 40)
-      const rx = cx + largura + VAO * 2
-      let ry = fy + PAD
-      for (const x of direita) { por(x, rx, ry); ry += tam(x).h + VAO }
-      const fim = direita.length ? rx + Math.max(...direita.map((x) => tam(x).w)) : cx + largura
-      const caixa = { x: fx, y: fy, w: fim + PAD - fx, h: Math.max(ly - VAO, cy, ry - VAO) + PAD - fy }
+
+      // frame justo em volta de tudo, com o agente no meio do que é dele
+      const todos = [...centro, ...emVolta(largura, cy, volta)]
+      for (const [id] of todos) usados.add(id)
+      const minX = Math.min(...todos.map(([, x]) => x)), minY = Math.min(...todos.map(([, , y]) => y))
+      const maxX = Math.max(...todos.map(([id, x]) => x + tam(id).w)), maxY = Math.max(...todos.map(([id, , y]) => y + tam(id).h))
       // frame que já envolvia o agente é reaproveitado (mantém nome e cor); se não houver, nasce um
       const fr = frames.find((f) => {
         if (usados.has(f.id)) return false
         const t = tam(f.id)
         return centroAntes.x >= f.position.x && centroAntes.x <= f.position.x + t.w && centroAntes.y >= f.position.y && centroAntes.y <= f.position.y + t.h
       })
-      if (fr) por(fr.id, caixa.x, caixa.y, { w: caixa.w, h: caixa.h })
-      else novosFrames.push({ caixa, texto: nomeDoTerminal(r, r.sessao ? porSessao.get(r.sessao) || null : null), cor: CORES_FRENTE[i % CORES_FRENTE.length] })
-      fx += caixa.w + ENTRE
-      fundo = Math.max(fundo, caixa.y + caixa.h)
+      if (fr) usados.add(fr.id)
+      frentes.push({
+        itens: todos.map(([id, x, y]) => [id, x - minX + PAD, y - minY + PAD]), w: maxX - minX + PAD * 2, h: maxY - minY + PAD * 2,
+        fr: fr?.id, texto: nomeDoTerminal(r, r.sessao ? porSessao.get(r.sessao) || null : null), cor: CORES_FRENTE[i % CORES_FRENTE.length],
+      })
     })
 
+    // frentes em fileiras, na ordem: quantas por fileira deixam o conjunto mais perto do formato da tela
+    let porFila = frentes.length
+    let menorTela = Infinity
+    for (let n = frentes.length; n >= 1; n--) {
+      let w = 0, h = 0
+      for (let k = 0; k < frentes.length; k += n) {
+        const fila = frentes.slice(k, k + n)
+        w = Math.max(w, fila.reduce((s, f) => s + f.w, 0) + ENTRE * (fila.length - 1))
+        h += Math.max(...fila.map((f) => f.h)) + (k ? ENTRE : 0)
+      }
+      if (Math.max(w, h * A) < menorTela) { menorTela = Math.max(w, h * A); porFila = n }
+    }
+    let fundo = y0
+    let direita = x0
+    for (let k = 0; k < frentes.length; k += porFila) {
+      const fila = frentes.slice(k, k + porFila)
+      const fy = k ? fundo + ENTRE : y0
+      let fx = x0
+      for (const f of fila) {
+        for (const [id, x, y] of f.itens) por(id, fx + x, fy + y)
+        if (f.fr) por(f.fr, fx, fy, { w: f.w, h: f.h })
+        else novosFrames.push({ caixa: { x: fx, y: fy, w: f.w, h: f.h }, texto: f.texto, cor: f.cor })
+        fx += f.w + ENTRE
+      }
+      direita = Math.max(direita, fx - ENTRE)
+      fundo = fy + Math.max(...fila.map((f) => f.h))
+    }
+
     // o que não é de nenhuma frente: fila embaixo, quebrando na largura das frentes
-    const larguraTotal = Math.max(fx - x0 - ENTRE, 2400)
+    const larguraTotal = Math.max(direita - x0, 2400)
     const soltos = lista.filter((n) => !usados.has(n.id) && !n.id.startsWith('f:') && !n.id.startsWith('s:') && !n.id.startsWith('sub:')
       && !(n.type === 'terminal' && (n.data as DadosTerminal).t.paiSessao))
     if (soltos.length) {
@@ -1314,7 +1416,7 @@ function Quadro({ canvas, sessoes, visiveis, tema, aoAbrir }: Props) {
           <Button size="icon" variant="ghost" className="size-8 rounded-lg" title="Checklist (com um terminal selecionado, já nasce ligada a ele)" onClick={() => void criarBloco('checklist', undefined, terminalSelecionado()).catch(() => {})}><ListChecks className="size-4" style={{ color: COR.checklist }} /></Button>
           <Button size="icon" variant="ghost" className="size-8 rounded-lg" title="Janela do Git" onClick={() => void criarTerminal({ tipo: 'git', cwd: pastaPadrao, titulo: 'Git' }).catch(() => {})}><GitBranch className="size-4" style={{ color: COR.git }} /></Button>
           <span className="mx-1 h-5 w-px bg-border" />
-          <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg px-2.5" title="Organizar: um frame por agente, com as notas, checklists, Git, widgets, vídeos e páginas dele; o resto numa fila embaixo (Ctrl+Z desfaz)" onClick={() => void organizar()}>
+          <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg px-2.5" title="Organizar: um frame por agente, com ele no meio e as notas, checklists, Git, widgets, vídeos e páginas dele em volta; o resto numa fila embaixo (Ctrl+Z desfaz)" onClick={() => void organizar()}>
             <LayoutDashboard className="size-4" />Organizar
           </Button>
           <IrAteAgente nos={nos} aoIr={(id) => { ultimoAgente.current = id; irAte(id) }} />

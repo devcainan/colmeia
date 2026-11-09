@@ -302,3 +302,18 @@
 
 /* arraste do canvas em andamento: a página embutida não pode engolir o soltar do botão (nos.tsx, vigiarArraste) */
 .arrastando-canvas iframe { pointer-events: none; }
+
+/* ---------- barra de rolagem única: fina, sem trilho nem setas, mais forte só ao passar o mouse ---------- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--foreground) 16%, transparent);
+}
+::-webkit-scrollbar-thumb:hover { background: color-mix(in oklch, var(--foreground) 34%, transparent); }
+@supports not selector(::-webkit-scrollbar) {
+    * { scrollbar-width: thin; scrollbar-color: color-mix(in oklch, var(--foreground) 16%, transparent) transparent; }
+}
+/* terminal (xterm 6 desenha a própria barra): mesma pílula fina */
+.xterm .xterm-scrollable-element > .scrollbar > .slider { border-radius: 9999px; }

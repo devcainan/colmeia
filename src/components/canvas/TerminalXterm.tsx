@@ -9,6 +9,9 @@ const TEMA = {
   black: '#1c1c22', brightBlack: '#5c5c66', red: '#f0707a', brightRed: '#ff8f97', green: '#7ccf8a', brightGreen: '#98e3a4',
   yellow: '#e8c06a', brightYellow: '#f5d48a', blue: '#78a6f5', brightBlue: '#9bbdff', magenta: '#c49bf0', brightMagenta: '#d7b6ff',
   cyan: '#6fcfd6', brightCyan: '#8fe3e9', white: '#d6d6dc', brightWhite: '#ffffff',
+  // barra de rolagem igual à do resto do painel (index.css): pílula fina, sem a borda da régua
+  scrollbarSliderBackground: '#ffffff29', scrollbarSliderHoverBackground: '#ffffff57', scrollbarSliderActiveBackground: '#ffffff70',
+  overviewRulerBorder: '#00000000',
 }
 
 /** Terminal de verdade: o que se digita vai para o processo no servidor; a tela chega pelo WebSocket. */
@@ -20,7 +23,7 @@ export function TerminalXterm({ id, className }: { id: string; className?: strin
     if (!el) return
     const term = new Terminal({
       fontFamily: '"Geist Mono Variable", ui-monospace, Consolas, monospace',
-      fontSize: 12, lineHeight: 1.15, cursorBlink: true, scrollback: 5000, allowProposedApi: true, theme: TEMA,
+      fontSize: 12, lineHeight: 1.15, cursorBlink: true, scrollback: 5000, allowProposedApi: true, theme: TEMA, overviewRuler: { width: 6 },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
